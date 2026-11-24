@@ -21,6 +21,8 @@ import {
   Login,
   Register,
   Conversations,
+  CreateShop,
+  MyShop,
 } from "./pages/Pages-temp"
 
 function Hero() {
@@ -171,7 +173,7 @@ function ServicesSection() {
   return (
     <section className="services-section">
       <div className="services-content">
-        <div>
+        <div className="service-text">
           <h2>Student Services</h2>
           <p>
             More than just products. Discover useful services
@@ -184,7 +186,7 @@ function ServicesSection() {
 
         <div className="services-image">
           <img
-            src="/images/student-services.jpg"
+            src="/images/student-service.jpg"
             alt="Student Services"
           />
         </div>
@@ -226,6 +228,8 @@ function HomePage() {
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/conversations" element={<Conversations />} />
+        <Route path="/create-shop" element={<CreateShop />} />
+        <Route path="/my-shop" element={<MyShop />} />
       </Routes>
 
       <Footer />

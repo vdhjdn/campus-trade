@@ -147,6 +147,7 @@ function Shop() {
 
 
 
+
 function ProductDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -172,37 +173,83 @@ function ProductDetails() {
 
       setProduct(data);
 
-if (data) {
-  let relatedQuery = supabase
-    .from("products")
-    .select("*")
-    .eq("is_deleted", false)
-    .eq("status", "Available")
-    .gt("quantity", 0)
-    .neq("product_id", data.product_id)
-    .limit(4);
+      if (data) {
+        let relatedQuery = supabase
+          .from("products")
+          .select("*")
+          .eq("is_deleted", false)
+          .eq("status", "Available")
+          .gt("quantity", 0)
+          .neq("product_id", data.product_id)
+          .limit(4);
 
-  if (data.shop_id) {
-    relatedQuery = relatedQuery.eq("shop_id", data.shop_id);
-  } else {
-    relatedQuery = relatedQuery.eq("category", data.category);
-  }
+        if (data.shop_id) {
+          relatedQuery = relatedQuery.eq("shop_id", data.shop_id);
+        } else {
+          relatedQuery = relatedQuery.eq("category", data.category);
+        }
 
-  const { data: relatedData, error: relatedError } =
-    await relatedQuery;
+        const { data: relatedData, error: relatedError } =
+          await relatedQuery;
 
-  if (relatedError) {
-    console.error("Error fetching related products:", relatedError.message);
-  }
+        if (relatedError) {
+          console.error(
+            "Error fetching related products:",
+            relatedError.message
+          );
+        }
 
-  setRelatedProducts(relatedData || []);
-}
+        setRelatedProducts(relatedData || []);
+      }
 
-setLoading(false);
+      setLoading(false);
     }
 
     fetchProduct();
   }, [id]);
+
+  async function addToCart() {
+    const { data, error } = await supabase.auth.getUser();
+
+    if (error || !data.user) {
+      alert("Please log in before adding products to your cart.");
+      navigate("/login");
+      return;
+    }
+
+    const existingCart =
+      JSON.parse(localStorage.getItem("cart")) || [];
+
+    const existingItem = existingCart.find(
+      (item) => item.id === product.product_id
+    );
+
+    if (existingItem) {
+      if (existingItem.quantity + quantity > product.quantity) {
+        alert("Not enough stock available.");
+        return;
+      }
+
+      existingItem.quantity += quantity;
+    } else {
+      if (quantity > product.quantity) {
+        alert("Not enough stock available.");
+        return;
+      }
+
+      existingCart.push({
+        id: product.product_id,
+        name: product.name,
+        price: Number(product.price),
+        image: product.product_photo,
+        quantity: quantity,
+        stock: product.quantity,
+      });
+    }
+
+    localStorage.setItem("cart", JSON.stringify(existingCart));
+    alert("Product added to cart!");
+  }
 
   if (loading) {
     return (
@@ -220,6 +267,105 @@ setLoading(false);
       </div>
     );
   }
+
+  return (
+    <div className="product-details-page">
+      <Link to="/shop" className="back-link">
+        ← Back to Shop
+      </Link>
+
+      <div className="product-details-container">
+        <div className="product-details-image">
+          <img
+            src={product.product_photo}
+            alt={product.name}
+          />
+        </div>
+
+        <div className="product-details-info">
+          <p className="product-details-category">
+            {product.category}
+          </p>
+
+          <h1>{product.name}</h1>
+
+          <p className="product-details-price">
+            RM {Number(product.price).toFixed(2)}
+          </p>
+
+          <p className="product-description">
+            {product.description || "No description available."}
+          </p>
+
+          <p className="product-stock">
+            {product.quantity} available
+          </p>
+
+          <div className="quantity-control">
+            <button
+              onClick={() =>
+                setQuantity((previous) => Math.max(1, previous - 1))
+              }
+            >
+              -
+            </button>
+
+            <span>{quantity}</span>
+
+            <button
+              onClick={() =>
+                setQuantity((previous) =>
+                  Math.min(product.quantity, previous + 1)
+                )
+              }
+            >
+              +
+            </button>
+          </div>
+
+          <button
+            className="add-cart-button"
+            onClick={addToCart}
+          >
+            Add to Cart
+          </button>
+        </div>
+      </div>
+
+      {relatedProducts.length > 0 && (
+        <div className="related-products-section">
+          <h2>You May Also Like</h2>
+
+          <div className="shop-grid">
+            {relatedProducts.map((item) => (
+              <Link
+                to={`/product/${item.product_id}`}
+                className="shop-card"
+                key={item.product_id}
+              >
+                <img
+                  src={item.product_photo}
+                  alt={item.name}
+                />
+
+                <div className="shop-card-info">
+                  <p className="shop-category">
+                    {item.category}
+                  </p>
+
+                  <h3>{item.name}</h3>
+
+                  <p className="shop-price">
+                    RM {Number(item.price).toFixed(2)}
+                  </p>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
   
@@ -822,15 +968,74 @@ function OrderDetails() {
   );
 }
 
-function SellerDashboard() {
-  const listings = JSON.parse(
-    localStorage.getItem("sellerListings") || "[]"
-  );
 
+function SellerDashboard() {
+  const [listings, setListings] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  useEffect(() => {
+    async function fetchListings() {
+      try {
+        setLoading(true);
+        setErrorMessage("");
+
+        // 1. Get the logged-in user
+        const { data: authData, error: authError } =
+          await supabase.auth.getUser();
+
+        if (authError) throw authError;
+
+        if (!authData.user) {
+          setErrorMessage("Please log in to view your dashboard.");
+          return;
+        }
+
+        // 2. Get the seller's user_id
+        const { data: userData, error: userError } = await supabase
+          .from("users")
+          .select("user_id")
+          .eq("auth_user_id", authData.user.id)
+          .single();
+
+        if (userError) throw userError;
+
+        // 3. Get the seller's listings from Supabase
+        const { data, error } = await supabase
+          .from("products")
+          .select(`
+            product_id,
+            name,
+            category,
+            price,
+            quantity,
+            status,
+            product_photo,
+            created_at
+          `)
+          .eq("seller_id", userData.user_id)
+          .eq("is_deleted", false)
+          .order("created_at", { ascending: false });
+
+        if (error) throw error;
+
+        setListings(data || []);
+      } catch (error) {
+        console.error("Error loading dashboard:", error);
+        setErrorMessage(error.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchListings();
+  }, []);
+
+  // Calculate dashboard statistics
   const totalListings = listings.length;
 
   const availableListings = listings.filter(
-    (item) => item.status === "Available"
+    (item) => item.status === "Available" && Number(item.quantity) > 0
   ).length;
 
   const totalStock = listings.reduce(
@@ -843,6 +1048,14 @@ function SellerDashboard() {
     0
   );
 
+  if (loading) {
+    return (
+      <div className="seller-dashboard">
+        Loading your dashboard...
+      </div>
+    );
+  }
+
   return (
     <div className="seller-dashboard">
       <div className="seller-dashboard-header">
@@ -850,83 +1063,181 @@ function SellerDashboard() {
         <p>Overview of your selling activities.</p>
       </div>
 
-      <div className="dashboard-stats">
-        <div className="dashboard-stat-card">
-          <span>Total Listings</span>
-          <h2>{totalListings}</h2>
-          <p>Products you have listed</p>
+      {errorMessage && (
+        <div className="dashboard-empty">
+          <p>{errorMessage}</p>
         </div>
+      )}
 
-        <div className="dashboard-stat-card">
-          <span>Available Listings</span>
-          <h2>{availableListings}</h2>
-          <p>Currently available for sale</p>
-        </div>
-
-        <div className="dashboard-stat-card">
-          <span>Total Stock</span>
-          <h2>{totalStock}</h2>
-          <p>Total quantity of items</p>
-        </div>
-
-        <div className="dashboard-stat-card">
-          <span>Total Value</span>
-          <h2>RM {totalValue.toFixed(2)}</h2>
-          <p>Estimated value of current stock</p>
-        </div>
-      </div>
-
-      <div className="dashboard-recent-listings">
-        <div className="recent-listings-header">
-          <h2>Recent Listings</h2>
-          <Link to="/my-listings">View All</Link>
-        </div>
-
-        {listings.length === 0 ? (
-          <div className="dashboard-empty">
-            <p>You haven't listed any products yet.</p>
-            <Link to="/sell" className="add-listing-button">
-              Create Your First Listing
-            </Link>
-          </div>
-        ) : (
-          [...listings].reverse().slice(0, 3).map((item) => (
-            <div className="dashboard-listing-item" key={item.id}>
-              <img src={item.image} alt={item.name} />
-
-              <div className="dashboard-listing-info">
-                <h3>{item.name}</h3>
-                <p>{item.category}</p>
-              </div>
-
-              <div className="dashboard-listing-price">
-                <strong>RM {item.price.toFixed(2)}</strong>
-                <span>Stock: {item.quantity}</span>
-              </div>
+      {!errorMessage && (
+        <>
+          <div className="dashboard-stats">
+            <div className="dashboard-stat-card">
+              <span>Total Listings</span>
+              <h2>{totalListings}</h2>
+              <p>Products you have listed</p>
             </div>
-          ))
-        )}
-      </div>
+
+            <div className="dashboard-stat-card">
+              <span>Available Listings</span>
+              <h2>{availableListings}</h2>
+              <p>Currently available for sale</p>
+            </div>
+
+            <div className="dashboard-stat-card">
+              <span>Total Stock</span>
+              <h2>{totalStock}</h2>
+              <p>Total quantity of items</p>
+            </div>
+
+            <div className="dashboard-stat-card">
+              <span>Total Value</span>
+              <h2>RM {totalValue.toFixed(2)}</h2>
+              <p>Estimated value of current stock</p>
+            </div>
+          </div>
+
+          <div className="dashboard-recent-listings">
+            <div className="recent-listings-header">
+              <h2>Recent Listings</h2>
+              <Link to="/my-listings">View All</Link>
+            </div>
+
+            {listings.length === 0 ? (
+              <div className="dashboard-empty">
+                <p>You haven't listed any products yet.</p>
+                <Link to="/sell" className="add-listing-button">
+                  Create Your First Listing
+                </Link>
+              </div>
+            ) : (
+              listings.slice(0, 3).map((item) => (
+                <div
+                  className="dashboard-listing-item"
+                  key={item.product_id}
+                >
+                  <img
+                    src={item.product_photo}
+                    alt={item.name}
+                  />
+
+                  <div className="dashboard-listing-info">
+                    <h3>{item.name}</h3>
+                    <p>{item.category}</p>
+                  </div>
+
+                  <div className="dashboard-listing-price">
+                    <strong>
+                      RM {Number(item.price).toFixed(2)}
+                    </strong>
+                    <span>Stock: {item.quantity}</span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
-function MyListings() {
-  const [listings, setListings] = useState(() =>
-    JSON.parse(localStorage.getItem("sellerListings") || "[]")
-  );
 
-  function deleteListing(id) {
-    const confirmed = window.confirm("Are you sure you want to delete this listing?");
+
+function MyListings() {
+  const [listings, setListings] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  useEffect(() => {
+    async function fetchListings() {
+      try {
+        setLoading(true);
+        setErrorMessage("");
+
+        // 1. Get the currently logged-in user
+        const { data: authData, error: authError } =
+          await supabase.auth.getUser();
+
+        if (authError) throw authError;
+
+        if (!authData.user) {
+          setErrorMessage("Please log in to view your listings.");
+          return;
+        }
+
+        // 2. Get the seller's user_id
+        const { data: userData, error: userError } = await supabase
+          .from("users")
+          .select("user_id")
+          .eq("auth_user_id", authData.user.id)
+          .single();
+
+        if (userError) throw userError;
+
+        // 3. Get this seller's products from Supabase
+        const { data, error } = await supabase
+          .from("products")
+          .select(`
+            product_id,
+            name,
+            category,
+            price,
+            quantity,
+            handover_location,
+            status,
+            product_photo
+          `)
+          .eq("seller_id", userData.user_id)
+          .eq("is_deleted", false)
+          .order("created_at", { ascending: false });
+
+        if (error) throw error;
+
+        setListings(data || []);
+      } catch (error) {
+        console.error("Error loading listings:", error);
+        setErrorMessage(error.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchListings();
+  }, []);
+
+  // Delete listing from Supabase
+  async function deleteListing(id) {
+    const confirmed = window.confirm(
+      "Are you sure you want to delete this listing?"
+    );
 
     if (!confirmed) return;
 
-    const updatedListings = listings.filter(
-      (item) => item.id !== id
-    );
+    try {
+      const { error } = await supabase
+        .from("products")
+        .update({
+          is_deleted: true,
+          deleted_at: new Date().toISOString()
+        })
+        .eq("product_id", id);
 
-    setListings(updatedListings);
-    localStorage.setItem("sellerListings", JSON.stringify(updatedListings));
+      if (error) throw error;
+
+      // Remove the deleted listing from the page
+      setListings((currentListings) =>
+        currentListings.filter((item) => item.product_id !== id)
+      );
+
+    } catch (error) {
+      console.error("Error deleting listing:", error);
+      alert("Unable to delete listing: " + error.message);
+    }
+  }
+
+  if (loading) {
+    return <div className="my-listings-page">Loading your listings...</div>;
   }
 
   return (
@@ -942,7 +1253,11 @@ function MyListings() {
         </Link>
       </div>
 
-      {listings.length === 0 ? (
+      {errorMessage ? (
+        <div className="empty-listings">
+          <p>{errorMessage}</p>
+        </div>
+      ) : listings.length === 0 ? (
         <div className="empty-listings">
           <h2>No listings yet</h2>
           <p>Start selling by creating your first listing.</p>
@@ -954,8 +1269,11 @@ function MyListings() {
       ) : (
         <div className="my-listings-grid">
           {listings.map((item) => (
-            <div className="my-listing-card" key={item.id}>
-              <img src={item.image} alt={item.name} />
+            <div className="my-listing-card" key={item.product_id}>
+              <img
+                src={item.product_photo}
+                alt={item.name}
+              />
 
               <div className="my-listing-info">
                 <span className="my-listing-category">
@@ -965,7 +1283,7 @@ function MyListings() {
                 <h3>{item.name}</h3>
 
                 <p className="my-listing-price">
-                  RM {item.price.toFixed(2)}
+                  RM {Number(item.price).toFixed(2)}
                 </p>
 
                 <p className="my-listing-stock">
@@ -973,7 +1291,7 @@ function MyListings() {
                 </p>
 
                 <p className="my-listing-location">
-                  📍 {item.location}
+                  📍 {item.handover_location || "Not specified"}
                 </p>
 
                 <span className="listing-status">
@@ -982,7 +1300,7 @@ function MyListings() {
 
                 <button
                   className="delete-listing-button"
-                  onClick={() => deleteListing(item.id)}
+                  onClick={() => deleteListing(item.product_id)}
                 >
                   Delete Listing
                 </button>
@@ -995,44 +1313,202 @@ function MyListings() {
   );
 }
 
+
+
 function ListItem() {
   const navigate = useNavigate();
 
   const [name, setName] = useState("");
-  const [category, setCategory] = useState("Food & Drinks");
+  const [category, setCategory] = useState("Food");
   const [price, setPrice] = useState("");
   const [quantity, setQuantity] = useState("1");
   const [description, setDescription] = useState("");
   const [location, setLocation] = useState("Student Mall");
-  const [image, setImage] = useState("/images/drink.jpg");
 
-  function handleSubmit(e) {
-    e.preventDefault();
+  const [sellerId, setSellerId] = useState("");
+  const [shops, setShops] = useState([]);
+  const [shopId, setShopId] = useState("");
 
-    const newListing = {
-      id: Date.now(),
-      name,
-      category,
-      price: Number(price),
-      quantity: Number(quantity),
-      description,
-      location,
-      image,
-      status: "Available",
-      date: new Date().toLocaleString(),
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState("");
+
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    async function fetchSellerData() {
+      try {
+        const { data: { user }, error: authError } =
+          await supabase.auth.getUser();
+
+        if (authError) throw authError;
+
+        if (!user) {
+          navigate("/login");
+          return;
+        }
+
+        const { data: seller, error: sellerError } =
+          await supabase
+            .from("users")
+            .select("user_id")
+            .eq("auth_user_id", user.id)
+            .eq("account_status", "Active")
+            .maybeSingle();
+
+        if (sellerError) throw sellerError;
+
+        if (!seller) {
+          setError("Seller profile not found or inactive.");
+          return;
+        }
+
+        setSellerId(seller.user_id);
+
+        const { data: shopData, error: shopError } =
+          await supabase
+            .from("shops")
+            .select("shop_id, shop_name")
+            .eq("owner_id", seller.user_id)
+            .eq("shop_status", "Active");
+
+        if (shopError) throw shopError;
+
+        setShops(shopData || []);
+
+      } catch (err) {
+        console.error("Error loading seller data:", err);
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchSellerData();
+  }, [navigate]);
+
+  function handleImageChange(e) {
+    const file = e.target.files[0];
+
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      setError("Please select an image file.");
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setError("Image size must be less than 5MB.");
+      return;
+    }
+
+    setError("");
+    setImageFile(file);
+
+    const reader = new FileReader();
+
+    reader.onloadend = () => {
+      setImagePreview(reader.result);
     };
 
-    const listings = JSON.parse(
-      localStorage.getItem("sellerListings") || "[]"
+    reader.readAsDataURL(file);
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+
+    if (!imageFile) {
+      setError("Please upload a product image.");
+      return;
+    }
+
+    setSubmitting(true);
+    setError("");
+
+    try {
+      const { data: { user }, error: authError } =
+        await supabase.auth.getUser();
+
+      if (authError) throw authError;
+      if (!user || !sellerId) {
+        throw new Error("Please log in with an active seller account.");
+      }
+
+      // Upload image to Supabase Storage
+      const safeFileName = imageFile.name.replace(
+        /[^a-zA-Z0-9._-]/g,
+        "_"
+      );
+
+      const filePath =
+        `${user.id}/${Date.now()}-${safeFileName}`;
+
+      const { error: uploadError } = await supabase
+        .storage
+        .from("product-images")
+        .upload(filePath, imageFile, {
+          cacheControl: "3600",
+          upsert: false,
+          contentType: imageFile.type,
+        });
+
+      if (uploadError) throw uploadError;
+
+      // Get public image URL
+      const { data: publicUrlData } = supabase
+        .storage
+        .from("product-images")
+        .getPublicUrl(filePath);
+
+      const imageUrl = publicUrlData.publicUrl;
+
+      // Save product to Supabase
+      const { error: insertError } = await supabase
+        .from("products")
+        .insert({
+          seller_id: sellerId,
+          shop_id: shopId || null,
+          name: name,
+          category: category,
+          price: Number(price),
+          quantity: Number(quantity),
+          description: description,
+          handover_location: location,
+          product_photo: imageUrl,
+          status: "Available",
+          is_deleted: false,
+        });
+
+      if (insertError) throw insertError;
+
+      alert("Your listing has been created successfully!");
+
+      navigate("/my-listings");
+
+    } catch (err) {
+      console.error("Error creating listing:", err);
+      setError(err.message || "Unable to create listing.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="page-container">
+        <h2>Loading seller information...</h2>
+      </div>
     );
+  }
 
-    listings.push(newListing);
-
-    localStorage.setItem("sellerListings", JSON.stringify(listings));
-
-    alert("Your listing has been created successfully!");
-
-    navigate("/my-listings");
+  if (!sellerId) {
+    return (
+      <div className="page-container">
+        <h2>Unable to create listing</h2>
+        <p>{error}</p>
+      </div>
+    );
   }
 
   return (
@@ -1060,12 +1536,11 @@ function ListItem() {
             value={category}
             onChange={(e) => setCategory(e.target.value)}
           >
-            <option>Food & Drinks</option>
-            <option>Hostel Essentials</option>
-            <option>Books & Notes</option>
-            <option>Electronics</option>
-            <option>Services</option>
-            <option>Others</option>
+            <option value="Study Item">Study Item</option>
+            <option value="Food">Food</option>
+            <option value="Hostel Item">Hostel Item</option>
+            <option value="Student Services">Student Services</option>
+            <option value="Other">Other</option>
           </select>
         </div>
 
@@ -1074,9 +1549,9 @@ function ListItem() {
             <label>Price (RM)</label>
             <input
               type="number"
-              placeholder="0.00"
               min="0.01"
               step="0.01"
+              placeholder="0.00"
               value={price}
               onChange={(e) => setPrice(e.target.value)}
               required
@@ -1124,26 +1599,460 @@ function ListItem() {
         </div>
 
         <div className="listing-field">
-          <label>Product Image</label>
+          <label>Shop</label>
           <select
-            value={image}
-            onChange={(e) => setImage(e.target.value)}
+            value={shopId}
+            onChange={(e) => setShopId(e.target.value)}
           >
-            <option value="/images/drink.jpg">Drink Image</option>
-            <option value="/images/cup.jpg">Cup Image</option>
-            <option value="/images/throw.jpg">Throw Image</option>
-            <option value="/images/lamp.jpg">Lamp Image</option>
-          </select>
+            <option value="">Personal Listing (No Shop)</option>
 
-          <div className="listing-image-preview">
-            <img src={image} alt="Product preview" />
-          </div>
+            {shops.map((shop) => (
+              <option key={shop.shop_id} value={shop.shop_id}>
+                {shop.shop_name}
+              </option>
+            ))}
+          </select>
         </div>
 
-        <button type="submit" className="create-listing-button">
-          Publish Listing
+        <div className="listing-field">
+          <label>Product Image</label>
+
+          <input
+            type="file"
+            accept="image/*"
+            onChange={handleImageChange}
+            required
+          />
+
+          {imagePreview && (
+            <div className="listing-image-preview">
+              <img src={imagePreview} alt="Product preview" />
+            </div>
+          )}
+        </div>
+
+        {error && (
+          <p style={{ color: "red" }}>{error}</p>
+        )}
+
+        <button
+          type="submit"
+          className="create-listing-button"
+          disabled={submitting}
+        >
+          {submitting ? "Publishing..." : "Publish Listing"}
         </button>
       </form>
+    </div>
+  );
+}
+
+
+function CreateShop() {
+  const navigate = useNavigate();
+
+  const [shopName, setShopName] = useState("");
+  const [shopDescription, setShopDescription] = useState("");
+  const [shopAddress, setShopAddress] = useState("");
+  const [shopPhoto, setShopPhoto] = useState(null);
+  const [qrCode, setQrCode] = useState(null);
+
+  const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  const [userId, setUserId] = useState(null);
+  const [authUserId, setAuthUserId] = useState(null);
+
+  // Check login and existing shop
+  useEffect(() => {
+    async function checkUser() {
+      const { data: authData, error: authError } =
+        await supabase.auth.getUser();
+
+      if (authError || !authData.user) {
+        navigate("/login");
+        return;
+      }
+
+      setAuthUserId(authData.user.id);
+
+      const { data: userData, error: userError } = await supabase
+        .from("users")
+        .select("user_id, user_type")
+        .eq("auth_user_id", authData.user.id)
+        .single();
+
+      if (userError) {
+        setErrorMessage(userError.message);
+        return;
+      }
+
+      if (userData.user_type !== "Campus Vendor") {
+        setErrorMessage("Only Campus Vendors can create a shop.");
+        return;
+      }
+
+      setUserId(userData.user_id);
+
+      // Check whether this vendor already has a shop
+      const { data: existingShop, error: shopError } = await supabase
+        .from("shops")
+        .select("shop_id")
+        .eq("owner_id", userData.user_id)
+        .maybeSingle();
+
+      if (shopError) {
+        setErrorMessage(shopError.message);
+        return;
+      }
+
+      if (existingShop) {
+        navigate("/my-shop");
+      }
+    }
+
+    checkUser();
+  }, [navigate]);
+
+  function handleImageChange(e, setImage) {
+    const file = e.target.files[0];
+
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      alert("Please select an image file.");
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      alert("Image size must be less than 5MB.");
+      return;
+    }
+
+    setImage(file);
+  }
+
+  async function handleCreateShop(e) {
+    e.preventDefault();
+
+    if (!userId || !authUserId) {
+      setErrorMessage("User information is not ready. Please try again.");
+      return;
+    }
+
+    if (!shopName.trim()) {
+      setErrorMessage("Please enter your shop name.");
+      return;
+    }
+
+    setLoading(true);
+    setErrorMessage("");
+
+    try {
+      let shopPhotoUrl = null;
+      let qrCodeUrl = null;
+
+      // Upload shop photo
+      if (shopPhoto) {
+        const safeName = shopPhoto.name.replace(/[^a-zA-Z0-9.-]/g, "-");
+        const filePath = `${authUserId}/${Date.now()}-${safeName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("shop-images")
+          .upload(filePath, shopPhoto);
+
+        if (uploadError) throw uploadError;
+
+        const { data } = supabase.storage
+          .from("shop-images")
+          .getPublicUrl(filePath);
+
+        shopPhotoUrl = data.publicUrl;
+      }
+
+      // Upload DuitNow QR Code
+      if (qrCode) {
+        const safeName = qrCode.name.replace(/[^a-zA-Z0-9.-]/g, "-");
+        const filePath = `${authUserId}/${Date.now()}-${safeName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("shop-images")
+          .upload(filePath, qrCode);
+
+        if (uploadError) throw uploadError;
+
+        const { data } = supabase.storage
+          .from("shop-images")
+          .getPublicUrl(filePath);
+
+        qrCodeUrl = data.publicUrl;
+      }
+
+      // Save shop information to Supabase
+      const { error: insertError } = await supabase
+        .from("shops")
+        .insert({
+          owner_id: userId,
+          shop_name: shopName.trim(),
+          shop_description: shopDescription.trim(),
+          shop_address: shopAddress.trim(),
+          shop_photo: shopPhotoUrl,
+          duitnow_qr_url: qrCodeUrl,
+          verification_status: "Pending",
+          shop_status: "Active",
+        });
+
+      if (insertError) throw insertError;
+
+      alert("Shop created successfully!");
+      navigate("/my-shop");
+
+    } catch (error) {
+      console.error("Create shop error:", error);
+      setErrorMessage(error.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="create-shop-page">
+      <div className="create-shop-header">
+        <h1>Create Your Shop</h1>
+        <p>Set up your own campus shop on CampusTrade.</p>
+      </div>
+
+      <form className="create-shop-form" onSubmit={handleCreateShop}>
+        <div className="create-shop-field">
+          <label>Shop Name *</label>
+          <input
+            type="text"
+            value={shopName}
+            onChange={(e) => setShopName(e.target.value)}
+            placeholder="Enter your shop name"
+            required
+          />
+        </div>
+
+        <div className="create-shop-field">
+          <label>Shop Description</label>
+          <textarea
+            value={shopDescription}
+            onChange={(e) => setShopDescription(e.target.value)}
+            placeholder="Tell buyers about your shop"
+            rows="4"
+          />
+        </div>
+
+        <div className="create-shop-field">
+          <label>Shop Address</label>
+          <input
+            type="text"
+            value={shopAddress}
+            onChange={(e) => setShopAddress(e.target.value)}
+            placeholder="Enter your shop address"
+          />
+        </div>
+
+        <div className="create-shop-field">
+          <label>Shop Photo</label>
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => handleImageChange(e, setShopPhoto)}
+          />
+          {shopPhoto && <p>Selected: {shopPhoto.name}</p>}
+        </div>
+
+        <div className="create-shop-field">
+          <label>DuitNow QR Code</label>
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => handleImageChange(e, setQrCode)}
+          />
+          {qrCode && <p>Selected: {qrCode.name}</p>}
+        </div>
+
+        {errorMessage && (
+          <p className="create-shop-error">{errorMessage}</p>
+        )}
+
+        <button type="submit" disabled={loading || !userId}>
+          {loading ? "Creating Shop..." : "Create Shop"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+
+
+function MyShop() {
+  const navigate = useNavigate();
+
+  const [shop, setShop] = useState(null);
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  useEffect(() => {
+    async function loadMyShop() {
+      try {
+        // Check login
+        const { data: authData, error: authError } =
+          await supabase.auth.getUser();
+
+        if (authError || !authData.user) {
+          navigate("/login");
+          return;
+        }
+
+        // Get current user's database ID
+        const { data: userData, error: userError } =
+          await supabase
+            .from("users")
+            .select("user_id")
+            .eq("auth_user_id", authData.user.id)
+            .single();
+
+        if (userError) throw userError;
+
+        // Get this user's shop
+        const { data: shopData, error: shopError } =
+          await supabase
+            .from("shops")
+            .select("*")
+            .eq("owner_id", userData.user_id)
+            .maybeSingle();
+
+        if (shopError) throw shopError;
+
+        if (!shopData) {
+          setShop(null);
+          return;
+        }
+
+        setShop(shopData);
+
+        // Get products belonging to this shop
+        const { data: productData, error: productError } =
+          await supabase
+            .from("products")
+            .select("*")
+            .eq("shop_id", shopData.shop_id)
+            .eq("is_deleted", false)
+            .order("created_at", { ascending: false });
+
+        if (productError) throw productError;
+
+        setProducts(productData || []);
+
+      } catch (error) {
+        console.error("Load My Shop error:", error);
+        setErrorMessage(error.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadMyShop();
+  }, [navigate]);
+
+  if (loading) {
+    return <div className="my-shop-page">Loading your shop...</div>;
+  }
+
+  if (errorMessage) {
+    return (
+      <div className="my-shop-page">
+        <p>{errorMessage}</p>
+      </div>
+    );
+  }
+
+  if (!shop) {
+    return (
+      <div className="my-shop-page">
+        <div className="my-shop-empty">
+          <h2>You haven't created a shop yet</h2>
+          <p>Create your own campus shop to start selling!</p>
+          <button onClick={() => navigate("/create-shop")}>
+            Create My Shop
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="my-shop-page">
+      <div className="my-shop-header">
+        {shop.shop_photo && (
+          <img
+            src={shop.shop_photo}
+            alt={shop.shop_name}
+            className="my-shop-photo"
+          />
+        )}
+
+        <div className="my-shop-info">
+          <h1>{shop.shop_name}</h1>
+
+          <p>
+            {shop.shop_description || "No shop description yet."}
+          </p>
+
+          {shop.shop_address && (
+            <p>📍 {shop.shop_address}</p>
+          )}
+
+          <span className="my-shop-status">
+            Verification: {shop.verification_status}
+          </span>
+        </div>
+      </div>
+
+      {shop.duitnow_qr_url && (
+        <div className="my-shop-qr">
+          <h3>My DuitNow QR Code</h3>
+          <img
+            src={shop.duitnow_qr_url}
+            alt="DuitNow QR Code"
+          />
+        </div>
+      )}
+
+      <div className="my-shop-products">
+        <h2>My Shop Products</h2>
+
+        {products.length === 0 ? (
+          <p>You haven't added any products to your shop yet.</p>
+        ) : (
+          <div className="my-shop-product-grid">
+            {products.map((product) => (
+              <div
+                className="my-shop-product-card"
+                key={product.product_id}
+              >
+                {product.product_photo && (
+                  <img
+                    src={product.product_photo}
+                    alt={product.name}
+                  />
+                )}
+
+                <div className="my-shop-product-info">
+                  <h3>{product.name}</h3>
+                  <p>RM {Number(product.price).toFixed(2)}</p>
+                  <p>Quantity: {product.quantity}</p>
+                  <span>{product.status}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1156,6 +2065,18 @@ function Profile() {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
+  const [editMode, setEditMode] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [photoFile, setPhotoFile] = useState(null);
+  const [photoPreview, setPhotoPreview] = useState("");
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
+  const [formData, setFormData] = useState({
+    name: "",
+    contact_number: "",
+    whatsapp: "",
+    telegram: "",
+  });
 
   useEffect(() => {
     async function loadProfile() {
@@ -1170,7 +2091,7 @@ function Profile() {
 
       const { data, error } = await supabase
         .from("users")
-        .select("name, email, user_type")
+        .select("name, email, user_type, contact_number, whatsapp, telegram, profile_photo")
         .eq("auth_user_id", authData.user.id)
         .single();
 
@@ -1182,11 +2103,156 @@ function Profile() {
       }
 
       setProfile(data);
+
+      setFormData({
+        name: data.name || "",
+        contact_number: data.contact_number || "",
+        whatsapp: data.whatsapp || "",
+        telegram: data.telegram || "",
+      });
+
       setLoading(false);
     }
 
     loadProfile();
   }, []);
+
+  function handleInputChange(e) {
+    const { name, value } = e.target;
+
+    setFormData({
+      ...formData,
+      [name]: value,
+    });
+  }
+
+  function handlePhotoChange(e) {
+  const file = e.target.files[0];
+
+  if (!file) return;
+
+  if (!file.type.startsWith("image/")) {
+    alert("Please select an image file.");
+    return;
+  }
+
+  if (file.size > 5 * 1024 * 1024) {
+    alert("Image size must be less than 5MB.");
+    return;
+  }
+
+  setPhotoFile(file);
+  setPhotoPreview(URL.createObjectURL(file));
+}
+
+async function handlePhotoUpload() {
+  if (!photoFile) return;
+
+  setUploadingPhoto(true);
+  setErrorMessage("");
+
+  const { data: authData, error: authError } =
+    await supabase.auth.getUser();
+
+  if (authError || !authData.user) {
+    setErrorMessage("Please log in again.");
+    setUploadingPhoto(false);
+    return;
+  }
+
+  const safeFileName = photoFile.name.replace(/[^a-zA-Z0-9.-]/g, "-");
+
+  const filePath = `${authData.user.id}/${Date.now()}-${safeFileName}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from("profile-photos")
+    .upload(filePath, photoFile);
+
+  if (uploadError) {
+    setErrorMessage(uploadError.message);
+    setUploadingPhoto(false);
+    return;
+  }
+
+  const { data: urlData } = supabase.storage
+    .from("profile-photos")
+    .getPublicUrl(filePath);
+
+  const imageUrl = urlData.publicUrl;
+
+  const { data, error } = await supabase
+    .from("users")
+    .update({ profile_photo: imageUrl })
+    .eq("auth_user_id", authData.user.id)
+    .select("name, email, user_type, contact_number, whatsapp, telegram, profile_photo")
+    .single();
+
+  if (error) {
+    setErrorMessage(error.message);
+    setUploadingPhoto(false);
+    return;
+  }
+
+  setProfile(data);
+  setPhotoFile(null);
+  setPhotoPreview("");
+  setUploadingPhoto(false);
+
+  alert("Profile photo updated successfully!");
+}
+
+  function handleCancel() {
+    setFormData({
+      name: profile.name || "",
+      contact_number: profile.contact_number || "",
+      whatsapp: profile.whatsapp || "",
+      telegram: profile.telegram || "",
+    });
+
+    setEditMode(false);
+    setErrorMessage("");
+  }
+
+  async function handleSave(e) {
+    e.preventDefault();
+
+    setSaving(true);
+    setErrorMessage("");
+
+    const { data: authData, error: authError } =
+      await supabase.auth.getUser();
+
+    if (authError || !authData.user) {
+      setErrorMessage("Please log in again.");
+      setSaving(false);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("users")
+      .update({
+        name: formData.name,
+        contact_number: formData.contact_number,
+        whatsapp: formData.whatsapp,
+        telegram: formData.telegram,
+      })
+      .eq("auth_user_id", authData.user.id)
+      .select("name, email, user_type, contact_number, whatsapp, telegram")
+      .single();
+
+    if (error) {
+      console.error("Profile update error:", error);
+      setErrorMessage(error.message);
+      setSaving(false);
+      return;
+    }
+
+    setProfile(data);
+    setEditMode(false);
+    setSaving(false);
+
+    alert("Profile updated successfully!");
+  }
 
   async function handleLogout() {
     const confirmLogout = window.confirm(
@@ -1209,7 +2275,7 @@ function Profile() {
     return <div className="profile-page">Loading profile...</div>;
   }
 
-  if (errorMessage) {
+  if (errorMessage && !profile) {
     return (
       <div className="profile-page">
         <h2>Unable to Load Profile</h2>
@@ -1223,10 +2289,40 @@ function Profile() {
     <div className="profile-page">
       <div className="profile-header">
         <div className="profile-avatar">
-          <span>
-            {profile?.name?.charAt(0).toUpperCase() || "U"}
-          </span>
-        </div>
+      {photoPreview || profile?.profile_photo ? (
+        <img
+        src={photoPreview || profile.profile_photo}
+        alt="Profile"
+        />
+      ) : (
+        <span>
+        {profile?.name?.charAt(0).toUpperCase() || "U"}
+        </span>
+      )}
+      </div>
+
+      <div className="profile-photo-controls">
+      <label htmlFor="profile-photo-input">
+      Change Photo
+      </label>
+
+      <input
+        id="profile-photo-input"
+        type="file"
+        accept="image/*"
+        onChange={handlePhotoChange}
+      />
+
+      {photoFile && (
+        <button
+        type="button"
+        onClick={handlePhotoUpload}
+        disabled={uploadingPhoto}
+      >
+      {uploadingPhoto ? "Uploading..." : "Save Photo"}
+      </button>
+      )}
+      </div>
 
         <div>
           <h1>{profile?.name}</h1>
@@ -1236,27 +2332,131 @@ function Profile() {
       </div>
 
       <section className="profile-section">
+        <h2>My Profile</h2>
+
+        {!editMode ? (
+          <div className="profile-edit-section">
+            <p><strong>Name:</strong> {profile?.name}</p>
+            <p><strong>Contact Number:</strong> {profile?.contact_number || "Not provided"}</p>
+            <p><strong>WhatsApp:</strong> {profile?.whatsapp || "Not provided"}</p>
+            <p><strong>Telegram:</strong> {profile?.telegram || "Not provided"}</p>
+
+            <button
+              className="profile-edit-button"
+              onClick={() => setEditMode(true)}
+            >
+              Edit Profile
+            </button>
+          </div>
+        ) : (
+          <form className="profile-edit-form" onSubmit={handleSave}>
+            <div className="profile-edit-field">
+              <label>Name</label>
+              <input
+                type="text"
+                name="name"
+                value={formData.name}
+                onChange={handleInputChange}
+                required
+              />
+            </div>
+
+            <div className="profile-edit-field">
+              <label>Email Address</label>
+              <input
+                type="email"
+                value={profile?.email || ""}
+                disabled
+              />
+            </div>
+
+            <div className="profile-edit-field">
+              <label>Contact Number</label>
+              <input
+                type="tel"
+                name="contact_number"
+                value={formData.contact_number}
+                onChange={handleInputChange}
+              />
+            </div>
+
+            <div className="profile-edit-field">
+              <label>WhatsApp</label>
+              <input
+                type="text"
+                name="whatsapp"
+                value={formData.whatsapp}
+                onChange={handleInputChange}
+              />
+            </div>
+
+            <div className="profile-edit-field">
+              <label>Telegram</label>
+              <input
+                type="text"
+                name="telegram"
+                value={formData.telegram}
+                onChange={handleInputChange}
+              />
+            </div>
+
+            {errorMessage && (
+              <p style={{ color: "red" }}>{errorMessage}</p>
+            )}
+
+            <button type="submit" disabled={saving}>
+              {saving ? "Saving..." : "Save Changes"}
+            </button>
+
+            <button type="button" onClick={handleCancel}>
+              Cancel
+            </button>
+          </form>
+        )}
+      </section>
+
+      <section className="profile-section">
         <h2>Explore CampusTrade</h2>
 
-        <div className="profile-menu-grid">
-          <Link to="/shop" className="profile-menu-card">
-            <div className="profile-menu-icon">🛍️</div>
-            <div>
-              <h3>Shop</h3>
-              <p>Browse products and services</p>
-            </div>
-            <span>›</span>
-          </Link>
-
-          <Link to="/seller" className="profile-menu-card">
-            <div className="profile-menu-icon">🏪</div>
-            <div>
-              <h3>Seller Dashboard</h3>
-              <p>Manage your selling activities</p>
-            </div>
-            <span>›</span>
-          </Link>
+        
+      <div className="profile-menu-grid">
+        <Link to="/shop" className="profile-menu-card">
+        <div className="profile-menu-icon">🛍️</div>
+        <div>
+        <h3>Shop</h3>
+        <p>Browse products and services</p>
         </div>
+        <span>›</span>
+        </Link>
+
+      <Link to="/my-shop" className="profile-menu-card">
+        <div className="profile-menu-icon">🏪</div>
+        <div>
+        <h3>My Shop</h3>
+        <p>View your shop and products</p>
+        </div>
+        <span>›</span>
+      </Link>
+
+  <Link to="/create-shop" className="profile-menu-card">
+    <div className="profile-menu-icon">➕</div>
+    <div>
+      <h3>Create Shop</h3>
+      <p>Set up your own campus shop</p>
+    </div>
+    <span>›</span>
+  </Link>
+
+  <Link to="/seller" className="profile-menu-card">
+    <div className="profile-menu-icon">📊</div>
+    <div>
+      <h3>Seller Dashboard</h3>
+      <p>Manage your selling activities</p>
+    </div>
+    <span>›</span>
+  </Link>
+</div>
+
       </section>
 
       <section className="profile-section">
@@ -1297,7 +2497,9 @@ function Profile() {
 
 
 
+
 function Login() {
+  const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -1325,8 +2527,7 @@ function Login() {
 
   setLoading(false);
   navigate("/");
-}
-
+  }
   return (
     <div className="login-page">
       <div className="login-container">
@@ -1800,7 +3001,9 @@ export {
   Profile,
   Login,
   Register,
-  Conversations
+  Conversations,
+  CreateShop,
+  MyShop,
 };
 
 export async function testSupabaseConnection() {
