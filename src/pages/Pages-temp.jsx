@@ -1492,12 +1492,13 @@ function Register() {
     setLoading(true);
 
     const { data, error } = await supabase.auth.signUp({
-      email: email,
-      password: password,
-      options: {
-        data: {
-        full_name: fullName,
-        user_type: userType,
+    email: email,
+    password: password,
+    options: {
+    emailRedirectTo: "https://campus-trade-bqpo.vercel.app",
+    data: {
+      full_name: fullName,
+      user_type: userType,
         },
       },
     });
