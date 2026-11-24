@@ -1,0 +1,13 @@
+campus-trade-react
+├── public
+│   └── images
+│       ├── campus-hero.png
+│       ├── drink.jpg
+│       ├── cup.jpg
+│       ├── throw.jpg
+│       ├── lamp.jpg
+│       └── student-services.png
+├── src
+│   ├── App.jsx
+│   ├── App.css
+│   └── main.jsx
