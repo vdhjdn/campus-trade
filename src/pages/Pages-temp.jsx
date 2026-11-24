@@ -1258,29 +1258,89 @@ function ListItem() {
 }
 
 
+
 function Profile() {
   const navigate = useNavigate();
 
-  function handleLogout() {
+  const [profile, setProfile] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  useEffect(() => {
+    async function loadProfile() {
+      const { data: authData, error: authError } =
+        await supabase.auth.getUser();
+
+      if (authError || !authData.user) {
+        setErrorMessage("Please log in to view your profile.");
+        setLoading(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("users")
+        .select("name, email, user_type")
+        .eq("auth_user_id", authData.user.id)
+        .single();
+
+      if (error) {
+        console.error("Profile loading error:", error);
+        setErrorMessage(error.message);
+        setLoading(false);
+        return;
+      }
+
+      setProfile(data);
+      setLoading(false);
+    }
+
+    loadProfile();
+  }, []);
+
+  async function handleLogout() {
     const confirmLogout = window.confirm(
       "Are you sure you want to log out?"
     );
 
     if (confirmLogout) {
+      const { error } = await supabase.auth.signOut();
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+
       navigate("/login");
     }
+  }
+
+  if (loading) {
+    return <div className="profile-page">Loading profile...</div>;
+  }
+
+  if (errorMessage) {
+    return (
+      <div className="profile-page">
+        <h2>Unable to Load Profile</h2>
+        <p>{errorMessage}</p>
+        <Link to="/login">Go to Login</Link>
+      </div>
+    );
   }
 
   return (
     <div className="profile-page">
       <div className="profile-header">
         <div className="profile-avatar">
-          <span>U</span>
+          <span>
+            {profile?.name?.charAt(0).toUpperCase() || "U"}
+          </span>
         </div>
 
         <div>
-          <h1>My Profile</h1>
-          <p>Welcome to CampusTrade!</p>
+          <h1>{profile?.name}</h1>
+          <p>{profile?.email}</p>
+          <p>{profile?.user_type}</p>
         </div>
       </div>
 
@@ -1342,6 +1402,7 @@ function Profile() {
     </div>
   );
 }
+
 
 
 
