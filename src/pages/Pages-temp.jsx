@@ -220,155 +220,46 @@ setLoading(false);
       </div>
     );
   }
+}
 
-  function addToCart() {
-    const existingCart =
-      JSON.parse(localStorage.getItem("cart")) || [];
+  
+async function addToCart() {
+  const { data, error } = await supabase.auth.getUser();
 
-    const existingItem = existingCart.find(
-      (item) => item.id === product.product_id
-    );
-
-    if (existingItem) {
-      if (existingItem.quantity + quantity > product.quantity) {
-        alert("Not enough stock available.");
-        return;
-      }
-      existingItem.quantity += quantity;
-    } else {
-      existingCart.push({
-        id: product.product_id,
-        name: product.name,
-        price: Number(product.price),
-        image: product.product_photo,
-        quantity: quantity,
-        stock: product.quantity,
-      });
-    }
-
-    localStorage.setItem("cart", JSON.stringify(existingCart));
-    alert("Product added to cart!");
+  if (error || !data.user) {
+    alert("Please log in before adding products to your cart.");
+    navigate("/login");
+    return;
   }
 
-  return (
-    <div className="product-details-page">
-      <div className="product-details-card">
+  const existingCart =
+    JSON.parse(localStorage.getItem("cart")) || [];
 
-        <div className="product-image-wrap">
-          <img
-            src={product.product_photo}
-            alt={product.name}
-          />
-        </div>
-
-        <div className="product-info">
-
-          <span className="product-category">
-            {product.category}
-          </span>
-
-          <h1>{product.name}</h1>
-
-          <h2 className="product-price">
-            RM {Number(product.price).toFixed(2)}
-          </h2>
-
-          <div className="product-description">
-            <h3>Product Description</h3>
-            <p>
-              {product.description || "No description available."}
-            </p>
-          </div>
-
-          <div className="product-stock">
-            <span>Availability</span>
-            <strong>{product.quantity} items in stock</strong>
-          </div>
-
-          <div className="product-purchase">
-            <span className="quantity-label">Quantity</span>
-
-            <div className="quantity-control">
-              <button
-                onClick={() =>
-                  setQuantity(Math.max(1, quantity - 1))
-                }
-                disabled={quantity <= 1}
-              >
-                -
-              </button>
-
-              <span>{quantity}</span>
-
-              <button
-                onClick={() =>
-                  setQuantity(
-                    Math.min(product.quantity, quantity + 1)
-                  )
-                }
-                disabled={quantity >= product.quantity}
-              >
-                +
-              </button>
-            </div>
-          </div>
-
-          <button
-            className="add-to-cart-btn"
-            onClick={addToCart}
-          >
-            Add to Cart
-          </button>
-
-          <button
-            className="back-to-shop-btn"
-            onClick={() => navigate("/shop")}
-          >
-            Back to Shop
-          </button>
-
-        </div>
-      </div>
-            {relatedProducts.length > 0 && (
-        <section className="related-products-section">
-          <div className="related-products-heading">
-            <div>
-              <h2>
-                {product.shop_id
-                  ? "More from This Shop"
-                  : "Related Products"}
-              </h2>
-              <p>You might also like these items</p>
-            </div>
-          </div>
-
-          <div className="related-products-grid">
-            {relatedProducts.map((item) => (
-              <Link
-                to={`/product/${item.product_id}`}
-                className="related-product-card"
-                key={item.product_id}
-              >
-                <div className="related-product-image">
-                  <img
-                    src={item.product_photo}
-                    alt={item.name}
-                  />
-                </div>
-
-                <div className="related-product-info">
-                  <span>{item.category}</span>
-                  <h3>{item.name}</h3>
-                  <p>RM {Number(item.price).toFixed(2)}</p>
-                </div>
-              </Link>
-            ))}
-          </div>
-        </section>
-      )}
-    </div>
+  const existingItem = existingCart.find(
+    (item) => item.id === product.product_id
   );
+
+  if (existingItem) {
+    if (existingItem.quantity + quantity > product.quantity) {
+      alert("Not enough stock available.");
+      return;
+    }
+    existingItem.quantity += quantity;
+  } else {
+    existingCart.push({
+      id: product.product_id,
+      name: product.name,
+      price: Number(product.price),
+      image: product.product_photo,
+      quantity: quantity,
+      stock: product.quantity,
+    });
+  }
+
+  localStorage.setItem("cart", JSON.stringify(existingCart));
+  alert("Product added to cart!");
 }
+
 
 
 
@@ -1433,7 +1324,7 @@ function Login() {
   console.log("Login successful:", data.user);
 
   setLoading(false);
-  navigate("/profile");
+  navigate("/");
 }
 
   return (
