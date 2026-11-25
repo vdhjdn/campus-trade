@@ -704,6 +704,27 @@ console.log("Seller Groups:", sellerGroups);
           console.error("Order items data:", orderItems);
           throw new Error(itemsError.message);
         }
+        
+        // 6. Calculate payment amount for this seller
+const paymentAmount = group.items.reduce(
+  (sum, item) => sum + Number(item.price) * item.quantity,
+  0
+);
+
+// 7. Create payment record
+const { error: paymentError } = await supabase
+  .from("payments")
+  .insert({
+    order_id: order.order_id,
+    amount: paymentAmount,
+    payment_method: "DuitNow",
+    payment_status: "Awaiting Payment",
+  });
+
+if (paymentError) {
+  console.error("Payment creation error:", paymentError);
+  throw new Error(paymentError.message);
+}
 
         createdOrders.push(order);
       }
@@ -993,17 +1014,77 @@ function Orders() {
         }
 
         // 3. Fetch orders and their order items
-        const { data, error } = await supabase
-          .from("orders")
-          .select("*, order_items!order_items_order_id_fkey(*)")
-          .eq("buyer_id", buyer.user_id)
-          .order("created_at", { ascending: false });
+        
+const { data, error } = await supabase
+  .from("orders")
+  .select(`
+    *,
+    order_items!order_items_order_id_fkey(*),
+    payments (
+      payment_id,
+      amount,
+      payment_status,
+      refunds (
+        refund_id,
+        refund_amount,
+        refund_status,
+        reason,
+        requested_at,
+        completed_at,
+        proof_url
+      )
+    )
+  `)
+  .eq("buyer_id", buyer.user_id)
+  .order("created_at", { ascending: false });
+
 
         if (error) {
           throw error;
         }
 
-        setOrders(data || []);
+       
+const ordersWithRefundUrls = await Promise.all(
+  (data || []).map(async (order) => {
+    const payment = order.payments?.[0];
+    const refund = payment?.refunds?.[0];
+
+    if (!refund?.proof_url) {
+      return order;
+    }
+
+    const { data: signedData, error: signedError } =
+      await supabase.storage
+        .from("refund-receipts")
+        .createSignedUrl(refund.proof_url, 60 * 60);
+
+    if (signedError) {
+      console.error(
+        "Refund receipt URL error:",
+        signedError
+      );
+      return order;
+    }
+
+    return {
+      ...order,
+      payments: [
+        {
+          ...payment,
+          refunds: [
+            {
+              ...refund,
+              proofSignedUrl: signedData.signedUrl,
+            },
+          ],
+        },
+      ],
+    };
+  })
+);
+
+setOrders(ordersWithRefundUrls);
+
       } catch (error) {
         console.error("Fetch orders error:", error);
         alert("Unable to load your orders: " + error.message);
@@ -1064,6 +1145,59 @@ function Orders() {
                   <span className="order-status">
                     {order.status}
                   </span>
+
+
+{order.status === "Cancelled" &&
+  order.payments?.[0]?.refunds?.[0] && (
+    <div className="buyer-refund-info">
+      <h4>Refund Information</h4>
+
+      <p>
+        <strong>Refund Amount:</strong>{" "}
+        RM{" "}
+        {Number(
+          order.payments[0].refunds[0].refund_amount
+        ).toFixed(2)}
+      </p>
+
+      <p>
+        <strong>Reason:</strong>{" "}
+        {order.payments[0].refunds[0].reason}
+      </p>
+
+      <p>
+        <strong>Refund Status:</strong>{" "}
+        {order.payments[0].refunds[0].refund_status}
+      </p>
+
+
+{order.payments[0].refunds[0].proofSignedUrl && (
+  <p>
+    <strong>Refund Receipt:</strong>{" "}
+    <a
+      href={order.payments[0].refunds[0].proofSignedUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => e.stopPropagation()}
+    >
+      View Refund Receipt
+    </a>
+  </p>
+)}
+
+
+      {order.payments[0].refunds[0].completed_at && (
+        <p>
+          <strong>Completed At:</strong>{" "}
+          {new Date(
+            order.payments[0].refunds[0].completed_at
+          ).toLocaleString()}
+        </p>
+      )}
+    </div>
+  )}
+
+
                 </div>
 
                 <div className="order-card-items">
@@ -1122,6 +1256,9 @@ function OrderDetails() {
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
+  const [updating, setUpdating] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     async function fetchOrderDetails() {
@@ -1150,20 +1287,35 @@ function OrderDetails() {
 
         if (buyerError) throw buyerError;
 
-        // 3. Get this buyer's order from Supabase
-        const { data, error } = await supabase
-          .from("orders")
-          .select(`
-            *,
-            order_items!order_items_order_id_fkey(*)
-          `)
-          .eq("order_id", id)
-          .eq("buyer_id", buyer.user_id)
-          .single();
+        
+// 3. Get this buyer's order from Supabase
+const { data, error } = await supabase
+  .from("orders")
+  .select(`
+    *,
+    order_items!order_items_order_id_fkey(*),
+    shops!orders_shop_id_fkey (
+      shop_name,
+      duitnow_qr_url
+    ),
+    payments (
+      payment_id,
+      amount,
+      payment_method,
+      payment_status,
+      receipt_url,
+      submitted_at,
+      verified_at
+    )
+  `)
+  .eq("order_id", id)
+  .eq("buyer_id", buyer.user_id)
+  .single();
 
-        if (error) throw error;
+if (error) throw error;
 
-        setOrder(data);
+setOrder(data);
+
       } catch (error) {
         console.error("Fetch order details error:", error);
         setErrorMessage(error.message);
@@ -1174,6 +1326,125 @@ function OrderDetails() {
 
     fetchOrderDetails();
   }, [id, navigate]);
+
+  async function confirmReceived() {
+  const confirmed = window.confirm(
+    "Have you received your order? Please confirm only after receiving all items."
+  );
+
+  if (!confirmed) return;
+
+  try {
+    setUpdating(true);
+
+    const { error } = await supabase
+      .from("orders")
+      .update({ status: "Completed" })
+      .eq("order_id", id);
+
+    if (error) throw error;
+
+    setOrder((currentOrder) => ({
+      ...currentOrder,
+      status: "Completed",
+    }));
+
+  } catch (error) {
+    console.error("Confirm received error:", error);
+    alert("Unable to confirm order: " + error.message);
+  } finally {
+    setUpdating(false);
+  }
+}
+
+
+async function uploadReceipt() {
+  if (!selectedFile) {
+    alert("Please select a receipt image first.");
+    return;
+  }
+
+  if (!payment) {
+    alert("Payment record not found.");
+    return;
+  }
+
+  // Only allow image files
+  if (!selectedFile.type.startsWith("image/")) {
+    alert("Please select an image file.");
+    return;
+  }
+
+  // Limit image size to 5MB
+  if (selectedFile.size > 5 * 1024 * 1024) {
+    alert("Image size must be less than 5MB.");
+    return;
+  }
+
+  try {
+    setUploading(true);
+
+    // 1. Get logged-in user
+    const { data: authData, error: authError } =
+      await supabase.auth.getUser();
+
+    if (authError) throw authError;
+    if (!authData.user) throw new Error("Please log in again.");
+
+    // 2. Create a unique file path
+    const fileExt = selectedFile.name.split(".").pop();
+    const filePath =
+      `${authData.user.id}/${id}/receipt-${Date.now()}.${fileExt}`;
+
+    // 3. Upload image to Supabase Storage
+    const { error: uploadError } = await supabase.storage
+      .from("payment-receipts")
+      .upload(filePath, selectedFile, {
+        upsert: false,
+        contentType: selectedFile.type,
+      });
+
+    if (uploadError) throw uploadError;
+
+    // 4. Update payment record
+    const { data: updatedPayment, error: paymentError } = await supabase
+      .from("payments")
+      .update({
+        receipt_url: filePath,
+        submitted_at: new Date().toISOString(),
+        payment_status: "Verification Pending",
+        verified_at: null,
+      })
+      .eq("payment_id", payment.payment_id)
+      .select()
+      .single();
+
+    if (paymentError) {
+      // Remove uploaded image if database update fails
+      await supabase.storage
+        .from("payment-receipts")
+        .remove([filePath]);
+
+      throw paymentError;
+    }
+
+    // 5. Update local page state
+    setOrder((currentOrder) => ({
+      ...currentOrder,
+      payments: [updatedPayment],
+    }));
+
+    setSelectedFile(null);
+
+    alert("Receipt uploaded successfully!");
+  } catch (error) {
+    console.error("Upload receipt error:", error);
+    alert("Unable to upload receipt: " + error.message);
+  } finally {
+    setUploading(false);
+  }
+}
+
 
   if (loading) {
     return (
@@ -1197,6 +1468,8 @@ function OrderDetails() {
   }
 
   const orderItems = order.order_items || [];
+  const payment = order.payments?.[0] || null;
+  const shop = order.shops || null;
 
   const total = orderItems.reduce(
     (sum, item) =>
@@ -1217,6 +1490,21 @@ function OrderDetails() {
         <h1>Order Details</h1>
         <span className="order-status">{order.status}</span>
       </div>
+
+      {["Ready for Pickup", "Out for Delivery"].includes(order.status) && (
+  <div className="confirm-received-section">
+    <p>
+      Have you received your order? Confirm once you have received all items.
+    </p>
+
+    <button
+      onClick={confirmReceived}
+      disabled={updating}
+    >
+      {updating ? "Confirming..." : "Confirm Received"}
+    </button>
+  </div>
+)}
 
       <div className="order-details-card">
         <h3>Order Information</h3>
@@ -1296,6 +1584,101 @@ function OrderDetails() {
           <strong>RM {total.toFixed(2)}</strong>
         </div>
       </div>
+
+
+{/* Payment Information */}
+<div className="order-details-card payment-information">
+  <h3>Payment Information</h3>
+
+  {payment ? (
+    <>
+      <div className="order-info-row">
+        <span>Payment Method</span>
+        <p>{payment.payment_method}</p>
+      </div>
+
+      <div className="order-info-row">
+        <span>Payment Amount</span>
+        <p>RM {Number(payment.amount).toFixed(2)}</p>
+      </div>
+
+      <div className="order-info-row">
+        <span>Payment Status</span>
+        <p className="payment-status">
+          {payment.payment_status}
+        </p>
+      </div>
+
+
+{/* Receipt Upload Section */}
+{["Awaiting Payment", "Rejected"].includes(payment.payment_status) && (
+  <div className="receipt-upload-section">
+    <h4>
+      {payment.payment_status === "Rejected"
+        ? "Upload a New Receipt"
+        : "Upload Payment Receipt"}
+    </h4>
+
+    <p>
+      After completing your DuitNow transfer, upload your payment receipt
+      for the seller to verify.
+    </p>
+
+    <input
+      type="file"
+      accept="image/*"
+      onChange={(e) => setSelectedFile(e.target.files[0] || null)}
+    />
+
+    {selectedFile && (
+      <div className="receipt-file-preview">
+        <p>Selected file: {selectedFile.name}</p>
+        <img
+          src={URL.createObjectURL(selectedFile)}
+          alt="Receipt preview"
+        />
+      </div>
+    )}
+
+    <button
+      onClick={uploadReceipt}
+      disabled={!selectedFile || uploading}
+    >
+      {uploading ? "Uploading..." : "Submit Receipt"}
+    </button>
+  </div>
+)}
+
+{payment.payment_status === "Verification Pending" && (
+  <div className="receipt-pending-message">
+    <p>Your receipt has been submitted.</p>
+    <strong>Waiting for seller verification.</strong>
+  </div>
+)}
+
+{payment.payment_status === "Verified" && (
+  <div className="receipt-verified-message">
+    <p>Your payment has been verified successfully!</p>
+  </div>
+)}
+
+
+      {shop?.duitnow_qr_url && (
+        <div className="payment-qr-section">
+          <h4>Seller's DuitNow QR Code</h4>
+          <img
+            src={shop.duitnow_qr_url}
+            alt="Seller's DuitNow QR Code"
+          />
+          <p>Scan this QR code to make your payment.</p>
+        </div>
+      )}
+    </>
+  ) : (
+    <p>Payment information is not available.</p>
+  )}
+</div>
+
     </div>
   );
 }
@@ -1492,9 +1875,14 @@ function SellerOrders() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
+  const [receiptUrls, setReceiptUrls] = useState({});
+  const [refundReason, setRefundReason] = useState("");
+  const [selectedOrder, setSelectedOrder] = useState(null);
+  const [refundFiles, setRefundFiles] = useState({});
+  const [refundUploading, setRefundUploading] = useState({});
 
-  useEffect(() => {
-    async function fetchSellerOrders() {
+  
+  async function fetchSellerOrders() {
       try {
         setLoading(true);
         setErrorMessage("");
@@ -1521,18 +1909,98 @@ function SellerOrders() {
         if (userError) throw userError;
 
         // 3. Get orders belonging to this seller
-        const { data, error } = await supabase
-          .from("orders")
-          .select(`
-            *,
-            order_items!order_items_order_id_fkey(*)
-          `)
-          .eq("seller_id", userData.user_id)
-          .order("created_at", { ascending: false });
+        
+const { data, error } = await supabase
+  .from("orders")
+  .select(`
+    *,
+    order_items!order_items_order_id_fkey(*),
+    payments (
+      payment_id,
+      amount,
+      payment_method,
+      payment_status,
+      receipt_url,
+      submitted_at,
+      verified_at,
+      refunds (
+        refund_id,
+        refund_amount,
+        refund_status,
+        reason,
+        requested_at,
+        completed_at,
+        proof_url
+      )
+    )
+  `)
+  .eq("seller_id", userData.user_id)
+  .order("created_at", { ascending: false });
 
         if (error) throw error;
 
-        setOrders(data || []);
+        const ordersWithReceiptUrls = await Promise.all(
+  (data || []).map(async (order) => {
+    const payment = order.payments?.[0];
+
+    let receiptSignedUrl = null;
+    let updatedRefunds = payment?.refunds || [];
+
+    // 1. Generate Buyer Payment Receipt URL
+    if (payment?.receipt_url) {
+      const { data: signedData, error: signedError } =
+        await supabase.storage
+          .from("payment-receipts")
+          .createSignedUrl(payment.receipt_url, 60 * 60);
+
+      if (signedError) {
+        console.error("Payment receipt URL error:", signedError);
+      } else {
+        receiptSignedUrl = signedData.signedUrl;
+      }
+    }
+
+    // 2. Generate Seller Refund Receipt URL
+    updatedRefunds = await Promise.all(
+      updatedRefunds.map(async (refund) => {
+        if (!refund.proof_url) return refund;
+
+        const { data: refundSignedData, error: refundSignedError } =
+          await supabase.storage
+            .from("refund-receipts")
+            .createSignedUrl(refund.proof_url, 60 * 60);
+
+        if (refundSignedError) {
+          console.error(
+            "Refund receipt URL error:",
+            refundSignedError
+          );
+          return refund;
+        }
+
+        return {
+          ...refund,
+          proofSignedUrl: refundSignedData.signedUrl,
+        };
+      })
+    );
+
+    return {
+      ...order,
+      receiptSignedUrl,
+      payments: payment
+        ? [
+            {
+              ...payment,
+              refunds: updatedRefunds,
+            },
+          ]
+        : [],
+    };
+  })
+);
+
+setOrders(ordersWithReceiptUrls);
       } catch (error) {
         console.error("Fetch seller orders error:", error);
         setErrorMessage(error.message);
@@ -1540,7 +2008,92 @@ function SellerOrders() {
         setLoading(false);
       }
     }
+    
+    async function uploadAndCompleteRefund(order) {
+  const payment = order.payments?.[0];
+  const refund = payment?.refunds?.[0];
+  const file = refundFiles[order.order_id];
 
+  // 1. Check refund record
+  if (!refund || refund.refund_status !== "Pending") {
+    alert("Pending refund record not found.");
+    return;
+  }
+
+  // 2. Check selected file
+  if (!file) {
+    alert("Please select a refund receipt first.");
+    return;
+  }
+
+  try {
+    setRefundUploading((current) => ({
+      ...current,
+      [order.order_id]: true,
+    }));
+
+    // 3. Get logged-in seller
+    const { data: authData, error: authError } =
+      await supabase.auth.getUser();
+
+    if (authError) throw authError;
+    if (!authData.user) {
+      throw new Error("Please log in again.");
+    }
+
+    // 4. Create a safe file path
+    const safeFileName = file.name.replace(
+      /[^a-zA-Z0-9._-]/g,
+      "_"
+    );
+
+    const filePath =
+      `${authData.user.id}/${order.order_id}/` +
+      `${Date.now()}-${safeFileName}`;
+
+    // 5. Upload receipt to Supabase Storage
+    const { error: uploadError } = await supabase.storage
+      .from("refund-receipts")
+      .upload(filePath, file, {
+        cacheControl: "3600",
+        upsert: false,
+      });
+
+    if (uploadError) throw uploadError;
+
+    // 6. Complete refund through secure database function
+    const { error: refundError } = await supabase.rpc(
+      "complete_seller_refund",
+      {
+        target_refund_id: refund.refund_id,
+        refund_proof_path: filePath,
+      }
+    );
+
+    if (refundError) throw refundError;
+
+    // 7. Clear selected file
+    setRefundFiles((current) => ({
+      ...current,
+      [order.order_id]: null,
+    }));
+
+    // 8. Refresh order information
+    await fetchSellerOrders();
+
+    alert("Refund completed successfully!");
+  } catch (error) {
+    console.error("Complete refund error:", error);
+    alert("Unable to complete refund: " + error.message);
+  } finally {
+    setRefundUploading((current) => ({
+      ...current,
+      [order.order_id]: false,
+    }));
+  }
+}
+
+    useEffect(() => {
     fetchSellerOrders();
   }, [navigate]);
 
@@ -1565,6 +2118,100 @@ function SellerOrders() {
     alert("Unable to update order: " + error.message);
   }
 }
+
+async function rejectOrder(order, reason) {
+  const payment = order.payments?.[0];
+
+  // Case 1: Payment has been verified
+  if (payment?.payment_status === "Verified") {
+    if (!reason || reason.trim() === "") {
+      alert("Please provide a rejection reason.");
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase.rpc(
+        "seller_reject_order_with_refund",
+        {
+          target_order_id: order.order_id,
+          refund_reason: reason.trim(),
+        }
+      );
+
+      if (error) throw error;
+
+      setSelectedOrder(null);
+      setRefundReason("");
+
+      await fetchSellerOrders();
+
+      alert("Order rejected. Refund is now pending.");
+
+    } catch (error) {
+      console.error("Reject paid order error:", error);
+      alert("Unable to reject order: " + error.message);
+    }
+
+    return;
+  }
+
+  // Case 2: Payment has not been verified
+  const confirmed = window.confirm(
+    "Are you sure you want to reject this order? The product stock will be restored."
+  );
+
+  if (confirmed) {
+    updateOrderStatus(order.order_id, "Rejected");
+  }
+}
+
+async function updatePaymentStatus(orderId, newStatus) {
+  try {
+    const order = orders.find(
+      (item) => item.order_id === orderId
+    );
+
+    const payment = order?.payments?.[0];
+
+    if (!payment) {
+      throw new Error("Payment record not found.");
+    }
+
+    const { data, error } = await supabase
+      .from("payments")
+      .update({
+        payment_status: newStatus,
+        verified_at: new Date().toISOString(),
+      })
+      .eq("payment_id", payment.payment_id)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    setOrders((currentOrders) =>
+      currentOrders.map((item) =>
+        item.order_id === orderId
+          ? {
+              ...item,
+              payments: [data],
+            }
+          : item
+      )
+    );
+
+    alert(
+      newStatus === "Verified"
+        ? "Payment verified successfully!"
+        : "Payment rejected. Buyer can upload a new receipt."
+    );
+
+  } catch (error) {
+    console.error("Update payment status error:", error);
+    alert("Unable to update payment: " + error.message);
+  }
+}
+
 
   if (loading) {
     return <div className="seller-orders-page">Loading orders...</div>;
@@ -1602,29 +2249,142 @@ function SellerOrders() {
             <p>Contact: {order.buyer_phone || "Not provided"}</p>
             <p>Fulfillment: {order.fulfillment_method}</p>
 
-            {order.status === "Pending" && (
-            <button
-            onClick={() => updateOrderStatus(order.order_id, "Confirmed")}
-            >
-            Confirm Order
-            </button>
-            )}
 
-            {order.status === "Pending" && (
+            {["Refund Pending", "Cancelled"].includes(order.status) && (
+  <div className="refund-upload-section">
+    <h4>Refund Information</h4>
+
+    {(() => {
+      const refund = order.payments?.[0]?.refunds?.[0];
+
+      if (!refund) {
+        return <p>Refund information not found.</p>;
+      }
+
+      return (
+        <>
+          <p>
+            <strong>Refund Amount:</strong> RM{" "}
+            {Number(refund.refund_amount).toFixed(2)}
+          </p>
+
+          <p>
+            <strong>Reason:</strong> {refund.reason}
+          </p>
+
+          <p>
+            <strong>Refund Status:</strong>{" "}
+            {refund.refund_status}
+          </p>
+
+          {refund.refund_status === "Pending" && (
+            <>
+              <label>Upload Refund Receipt:</label>
+
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp,application/pdf"
+                onChange={(e) => {
+                  const file = e.target.files?.[0] || null;
+
+                  setRefundFiles((current) => ({
+                    ...current,
+                    [order.order_id]: file,
+                  }));
+                }}
+              />
+
+              {refundFiles[order.order_id] && (
+                <p>
+                  Selected file:{" "}
+                  {refundFiles[order.order_id].name}
+                </p>
+              )}
+
+              <button
+                onClick={() => uploadAndCompleteRefund(order)}
+                disabled={refundUploading[order.order_id]}
+              >
+                {refundUploading[order.order_id]
+                  ? "Uploading..."
+                  : "Upload Receipt & Complete Refund"}
+              </button>
+            </>
+          )}
+        </>
+      );
+    })()}
+  </div>
+)}
+
+           
+{order.status === "Pending" &&
+  order.payments?.[0]?.payment_status === "Verified" && (
+    <button
+      onClick={() =>
+        updateOrderStatus(order.order_id, "Confirmed")
+      }
+    >
+      Confirm Order
+    </button>
+)}
+
+{order.status === "Pending" &&
+  order.payments?.[0]?.payment_status !== "Verified" && (
+    <p className="payment-not-verified-message">
+      Please verify the buyer's payment before confirming this order.
+    </p>
+)}
+
+           {order.status === "Pending" && (
   <button
     className="reject-order-button"
     onClick={() => {
-      const confirmed = window.confirm(
-        "Are you sure you want to reject this order? The product stock will be restored."
-      );
-
-      if (confirmed) {
-        updateOrderStatus(order.order_id, "Rejected");
+      if (order.payments?.[0]?.payment_status === "Verified") {
+        setSelectedOrder(order);
+        setRefundReason("");
+      } else {
+        rejectOrder(order, "");
       }
     }}
   >
     Reject Order
   </button>
+)}
+
+{selectedOrder?.order_id === order.order_id && (
+  <div className="refund-reason-form">
+    <h4>Reject Paid Order</h4>
+
+    <p>
+      This order has already been paid.
+      A refund record will be created.
+    </p>
+
+    <label>Reason for rejection:</label>
+
+    <textarea
+      value={refundReason}
+      onChange={(e) => setRefundReason(e.target.value)}
+      placeholder="Please explain why you cannot fulfill this order..."
+      rows={3}
+    />
+
+    <button
+      onClick={() => rejectOrder(selectedOrder, refundReason)}
+    >
+      Confirm Rejection & Create Refund
+    </button>
+
+    <button
+      onClick={() => {
+        setSelectedOrder(null);
+        setRefundReason("");
+      }}
+    >
+      Cancel
+    </button>
+  </div>
 )}
 
           {order.status === "Confirmed" && (
@@ -1652,45 +2412,130 @@ function SellerOrders() {
   </button>
 )}
 
-{["Ready for Pickup", "Out for Delivery"].includes(order.status) && (
-  <button
-    onClick={() => {
-      const confirmed = window.confirm(
-        "Are you sure this order has been completed?"
-      );
-
-      if (confirmed) {
-        updateOrderStatus(order.order_id, "Completed");
-      }
-    }}
-  >
-    Mark as Completed
-  </button>
-)}
 
             {order.handover_location && (
               <p>Handover location: {order.handover_location}</p>
             )}
 
-            {order.notes && <p>Buyer notes: {order.notes}</p>}
+            
+{order.notes && <p>Buyer notes: {order.notes}</p>}
 
-            <h4>Items</h4>
+{/* Payment Information */}
+<h4>Payment Information</h4>
+
+{(() => {
+  const payment = order.payments?.[0];
+
+  if (!payment) {
+    return <p>Payment information is not available.</p>;
+  }
+
+  return (
+    <div className="seller-payment-info">
+      <p>
+        Payment Method: {payment.payment_method}
+      </p>
+
+      <p>
+        Payment Amount: RM {Number(payment.amount).toFixed(2)}
+      </p>
+
+      <p>
+        Payment Status: {payment.payment_status}
+      </p>
+
+      {payment.submitted_at && (
+        <p>
+          Submitted At: {new Date(payment.submitted_at).toLocaleString()}
+        </p>
+      )}
+
+
+{payment.payment_status === "Verification Pending" && (
+  <div className="payment-verification-actions">
+    <button
+      onClick={() => {
+        const confirmed = window.confirm(
+          "Have you confirmed that the payment was received?"
+        );
+
+        if (confirmed) {
+          updatePaymentStatus(order.order_id, "Verified");
+        }
+      }}
+    >
+      Verify Payment
+    </button>
+
+    <button
+      className="reject-order-button"
+      onClick={() => {
+        const confirmed = window.confirm(
+          "Are you sure you want to reject this payment receipt?"
+        );
+
+        if (confirmed) {
+          updatePaymentStatus(order.order_id, "Rejected");
+        }
+      }}
+    >
+      Reject Payment
+    </button>
+  </div>
+)}
+
+
+      {order.receiptSignedUrl && (
+        <div className="seller-receipt-preview">
+          <p>Buyer's Payment Receipt:</p>
+
+          <img
+            src={order.receiptSignedUrl}
+            alt="Buyer's payment receipt"
+          />
+        </div>
+      )}
+
+      {payment.payment_status === "Verification Pending" &&
+        !order.receiptSignedUrl && (
+          <p>Receipt image is currently unavailable.</p>
+        )}
+    </div>
+  );
+})()}
+
+<h4>Items</h4>
+
 
             {orderItems.map((item) => (
-              <div key={item.order_item_id}>
-                <p>
-                  {item.product_name} × {item.quantity}
-                  {" — RM "}
-                  {(Number(item.price_at_purchase) * item.quantity).toFixed(2)}
-                </p>
-              </div>
-            ))}
+  <div className="seller-order-item" key={item.order_item_id}>
+    {item.product_photo_at_purchase && (
+      <img
+        src={item.product_photo_at_purchase}
+        alt={item.product_name}
+      />
+    )}
 
-            <h4>Total: RM {total.toFixed(2)}</h4>
-          </div>
-        );
-      })}
+    <div className="seller-order-item-info">
+      <h5>{item.product_name}</h5>
+      <p>Quantity: {item.quantity}</p>
     </div>
+
+    <strong>
+      RM {(Number(item.price_at_purchase) * item.quantity).toFixed(2)}
+    </strong>
+  </div>
+))}
+
+<div className="seller-order-total">
+  <span>Total Amount</span>
+  <strong>RM {total.toFixed(2)}</strong>
+</div>
+
+</div>
+         );
+      })}
+     </div>
   );
 }
 
