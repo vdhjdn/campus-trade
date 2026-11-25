@@ -160,12 +160,19 @@ function ProductDetails() {
   useEffect(() => {
     async function fetchProduct() {
       const { data, error } = await supabase
-        .from("products")
-        .select("*")
-        .eq("product_id", id)
-        .eq("is_deleted", false)
-        .eq("status", "Available")
-        .maybeSingle();
+  .from("products")
+  .select(`
+  *,
+  shops:shops!products_shop_id_fkey (
+    shop_id,
+    shop_name,
+    shop_photo
+  )
+`)
+  .eq("product_id", id)
+  .eq("is_deleted", false)
+  .eq("status", "Available")
+  .maybeSingle();
 
       if (error) {
         console.error("Error fetching product:", error.message);
@@ -298,6 +305,15 @@ function ProductDetails() {
           </p>
 
           <h1>{product.name}</h1>
+
+          {product.shops && (
+  <p className="product-shop-name">
+    Sold by:{" "}
+    <Link to={`/shop/${product.shops.shop_id}`}>
+      {product.shops.shop_name}
+    </Link>
+  </p>
+)}
 
           <p className="product-details-price">
             RM {Number(product.price).toFixed(2)}
@@ -963,12 +979,11 @@ function OrderConfirmation() {
 
         <div className="confirmation-buttons">
           <button
-            onClick={() => navigate("/orders")}
-            className="view-orders-button"
-          >
-            View My Orders
-          </button>
-
+  onClick={() => navigate(`/order/${order.id}`)}
+  className="view-orders-button"
+>
+  Proceed to Payment
+</button>
           <button
             onClick={() => navigate("/shop")}
             className="continue-shopping-button"
@@ -3281,6 +3296,165 @@ function CreateShop() {
   );
 }
 
+function PublicShop() {
+  const { id } = useParams();
+
+  const [shop, setShop] = useState(null);
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    async function fetchPublicShop() {
+      setLoading(true);
+      setError("");
+
+      // 1. Get shop information
+      const { data: shopData, error: shopError } = await supabase
+        .from("shops")
+        .select("*")
+        .eq("shop_id", id)
+        .eq("shop_status", "Active")
+        .maybeSingle();
+
+      if (shopError) {
+        console.error("Error fetching shop:", shopError.message);
+        setError("Unable to load this shop.");
+        setLoading(false);
+        return;
+      }
+
+      if (!shopData) {
+        setShop(null);
+        setProducts([]);
+        setLoading(false);
+        return;
+      }
+
+      setShop(shopData);
+
+      // 2. Get this shop's available products
+      const { data: productData, error: productError } =
+        await supabase
+          .from("products")
+          .select("*")
+          .eq("shop_id", id)
+          .eq("is_deleted", false)
+          .eq("status", "Available")
+          .gt("quantity", 0)
+          .order("created_at", { ascending: false });
+
+      if (productError) {
+        console.error(
+          "Error fetching shop products:",
+          productError.message
+        );
+        setError("Unable to load shop products.");
+      } else {
+        setProducts(productData || []);
+      }
+
+      setLoading(false);
+    }
+
+    fetchPublicShop();
+  }, [id]);
+
+  if (loading) {
+    return (
+      <div className="page-container">
+        <h2>Loading shop...</h2>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="page-container">
+        <h2>{error}</h2>
+        <Link to="/shop">Back to Shop</Link>
+      </div>
+    );
+  }
+
+  if (!shop) {
+    return (
+      <div className="page-container">
+        <h1>Shop not found</h1>
+        <Link to="/shop">Back to Shop</Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="shop-page">
+      <Link to="/shop" className="back-link">
+        ← Back to Shop
+      </Link>
+
+      <div className="public-shop-header">
+        {shop.shop_photo && (
+          <img
+            src={shop.shop_photo}
+            alt={shop.shop_name}
+          />
+        )}
+
+        <h1>{shop.shop_name}</h1>
+
+        <p>
+          {shop.shop_description || "No shop description available."}
+        </p>
+
+        {shop.shop_address && (
+          <p>
+            <strong>Address:</strong> {shop.shop_address}
+          </p>
+        )}
+      </div>
+
+      <div className="shop-results">
+        <h2>Products from this Shop</h2>
+
+        <p>{products.length} products found</p>
+
+        <div className="shop-grid">
+          {products.length > 0 ? (
+            products.map((product) => (
+              <Link
+                to={`/product/${product.product_id}`}
+                className="shop-card"
+                key={product.product_id}
+              >
+                <img
+                  src={product.product_photo}
+                  alt={product.name}
+                />
+
+                <div className="shop-card-info">
+                  <p className="shop-category">
+                    {product.category}
+                  </p>
+
+                  <h3>{product.name}</h3>
+
+                  <p className="shop-price">
+                    RM {Number(product.price).toFixed(2)}
+                  </p>
+                </div>
+              </Link>
+            ))
+          ) : (
+            <div className="no-products">
+              <h3>No products available</h3>
+              <p>This shop has no available products at the moment.</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 
 function MyShop() {
@@ -4384,6 +4558,7 @@ useEffect(() => {
 
 export {
   Shop,
+  PublicShop,
   ProductDetails,
   Cart,
   Checkout,

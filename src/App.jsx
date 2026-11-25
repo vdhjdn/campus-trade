@@ -8,6 +8,7 @@ import Footer from "./components/Footer";
 
 import {
   Shop,
+  PublicShop,
   ProductDetails,
   Cart,
   Checkout,
@@ -216,6 +217,7 @@ function HomePage() {
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/shop" element={<Shop />} />
+        <Route path="/shop/:id" element={<PublicShop />} />
         <Route path="/product/:id" element={<ProductDetails />} />
         <Route path="/cart" element={<Cart />} />
         <Route path="/checkout" element={<Checkout />} />

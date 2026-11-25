@@ -4191,3 +4191,46 @@ button, input {
   background-color: #9aabb9;
   cursor: not-allowed;
 }
+
+/* Public Shop Page */
+
+.public-shop-header {
+  background: linear-gradient(135deg, #eaf4ff, #fff8df);
+  padding: 40px;
+  margin: 25px 0 40px;
+  border-radius: 20px;
+  text-align: center;
+}
+
+.public-shop-header img {
+  width: 120px;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 50%;
+  border: 4px solid white;
+  margin-bottom: 18px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.public-shop-header h1 {
+  font-size: 30px;
+  color: #30445c;
+  margin-bottom: 12px;
+}
+
+.public-shop-header p {
+  color: #6f7d8c;
+  font-size: 15px;
+  line-height: 1.7;
+  margin: 8px 0;
+}
+
+.public-shop-header strong {
+  color: #40566e;
+}
+
+.public-shop-header + .shop-results h2 {
+  color: #30445c;
+  font-size: 24px;
+  margin-bottom: 10px;
+}
