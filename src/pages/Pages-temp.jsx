@@ -209,47 +209,57 @@ function ProductDetails() {
   }, [id]);
 
   async function addToCart() {
-    const { data, error } = await supabase.auth.getUser();
+  const { data, error } = await supabase.auth.getUser();
 
-    if (error || !data.user) {
-      alert("Please log in before adding products to your cart.");
-      navigate("/login");
+  if (error || !data.user) {
+    alert("Please log in before adding products to your cart.");
+    navigate("/login");
+    return;
+  }
+
+  if (!product.seller_id) {
+    alert("Seller information is missing from this product.");
+    return;
+  }
+
+  const existingCart =
+    JSON.parse(localStorage.getItem("cart") || "[]");
+
+  const existingItem = existingCart.find(
+    (item) => item.id === product.product_id
+  );
+
+  if (existingItem) {
+    if (existingItem.quantity + quantity > product.quantity) {
+      alert("Not enough stock available.");
       return;
     }
 
-    const existingCart =
-      JSON.parse(localStorage.getItem("cart")) || [];
-
-    const existingItem = existingCart.find(
-      (item) => item.id === product.product_id
-    );
-
-    if (existingItem) {
-      if (existingItem.quantity + quantity > product.quantity) {
-        alert("Not enough stock available.");
-        return;
-      }
-
-      existingItem.quantity += quantity;
-    } else {
-      if (quantity > product.quantity) {
-        alert("Not enough stock available.");
-        return;
-      }
-
-      existingCart.push({
-        id: product.product_id,
-        name: product.name,
-        price: Number(product.price),
-        image: product.product_photo,
-        quantity: quantity,
-        stock: product.quantity,
-      });
+    existingItem.quantity += quantity;
+    existingItem.seller_id = product.seller_id;
+    existingItem.shop_id = product.shop_id || null;
+  } else {
+    if (quantity > product.quantity) {
+      alert("Not enough stock available.");
+      return;
     }
 
-    localStorage.setItem("cart", JSON.stringify(existingCart));
-    alert("Product added to cart!");
+    existingCart.push({
+      id: product.product_id,
+      name: product.name,
+      price: Number(product.price),
+      image: product.product_photo,
+      quantity: quantity,
+      stock: product.quantity,
+      seller_id: product.seller_id,
+      shop_id: product.shop_id || null,
+    });
   }
+
+  localStorage.setItem("cart", JSON.stringify(existingCart));
+  console.log("Saved cart:", existingCart);
+  alert("Product added to cart!");
+}
 
   if (loading) {
     return (
@@ -378,8 +388,13 @@ async function addToCart() {
     return;
   }
 
+  if (!product.seller_id) {
+    alert("Seller information is missing from this product.");
+    return;
+  }
+
   const existingCart =
-    JSON.parse(localStorage.getItem("cart")) || [];
+    JSON.parse(localStorage.getItem("cart") || "[]");
 
   const existingItem = existingCart.find(
     (item) => item.id === product.product_id
@@ -390,8 +405,16 @@ async function addToCart() {
       alert("Not enough stock available.");
       return;
     }
+
     existingItem.quantity += quantity;
+    existingItem.seller_id = product.seller_id;
+    existingItem.shop_id = product.shop_id || null;
   } else {
+    if (quantity > product.quantity) {
+      alert("Not enough stock available.");
+      return;
+    }
+
     existingCart.push({
       id: product.product_id,
       name: product.name,
@@ -399,10 +422,13 @@ async function addToCart() {
       image: product.product_photo,
       quantity: quantity,
       stock: product.quantity,
+      seller_id: product.seller_id,
+      shop_id: product.shop_id || null,
     });
   }
 
   localStorage.setItem("cart", JSON.stringify(existingCart));
+  console.log("Saved cart:", existingCart);
   alert("Product added to cart!");
 }
 
@@ -550,6 +576,7 @@ function Cart() {
   );
 }
 
+
 function Checkout() {
   const navigate = useNavigate();
 
@@ -564,8 +591,10 @@ function Checkout() {
   const [phone, setPhone] = useState("");
   const [location, setLocation] = useState("");
   const [notes, setNotes] = useState("");
+  const [fulfillmentMethod, setFulfillmentMethod] = useState("Pickup");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  function placeOrder(e) {
+  async function placeOrder(e) {
     e.preventDefault();
 
     if (cart.length === 0) {
@@ -574,29 +603,145 @@ function Checkout() {
       return;
     }
 
-    const order = {
-      id: Date.now(),
-      customerName: name,
-      phone: phone,
-      location: location,
-      notes: notes,
-      items: cart,
-      total: total,
-      date: new Date().toLocaleString(),
-      status: "Pending",
-    };
+    // Check whether every cart item has seller information
+    if (cart.some((item) => !item.seller_id)) {
+      alert(
+        "Some cart items are missing seller information. Please remove them and add the products again."
+      );
+      return;
+    }
 
-    const existingOrders = JSON.parse(
-      localStorage.getItem("orders") || "[]"
-    );
+    setIsSubmitting(true);
 
-    existingOrders.push(order);
+    try {
+      // 1. Get the currently logged-in buyer
+      const { data: authData, error: authError } =
+        await supabase.auth.getUser();
 
-    localStorage.setItem("orders", JSON.stringify(existingOrders));
-    localStorage.setItem("latestOrder", JSON.stringify(order));
-    localStorage.removeItem("cart");
+      if (authError || !authData.user) {
+        alert("Please log in before placing an order.");
+        navigate("/login");
+        return;
+      }
 
-    navigate("/order-confirmation");
+      // 2. Get the buyer's user_id from the users table
+      const { data: buyer, error: buyerError } = await supabase
+        .from("users")
+        .select("user_id")
+        .eq("auth_user_id", authData.user.id)
+        .eq("account_status", "Active")
+        .maybeSingle();
+
+      if (buyerError || !buyer) {
+        alert("Unable to find your active user profile.");
+        return;
+      }
+
+      // 3. Group cart items by seller
+      const sellerGroups = Object.values(
+        cart.reduce((groups, item) => {
+          if (!groups[item.seller_id]) {
+            groups[item.seller_id] = {
+              seller_id: item.seller_id,
+              shop_id: item.shop_id || null,
+              items: [],
+            };
+          }
+
+          groups[item.seller_id].items.push(item);
+
+          return groups;
+        }, {})
+      );
+
+
+      // 暂时加入这两行
+console.log("Buyer ID:", buyer.user_id);
+console.log("Seller Groups:", sellerGroups);
+
+      // 4. Create one order for each seller
+      const createdOrders = [];
+
+      for (const group of sellerGroups) {
+        const { data: order, error: orderError } = await supabase
+          .from("orders")
+          .insert({
+            buyer_id: buyer.user_id,
+            seller_id: group.seller_id,
+            shop_id: group.shop_id,
+            buyer_name: name,
+            buyer_phone: phone,
+            fulfillment_method: fulfillmentMethod,
+            handover_location: location,
+            notes: notes,
+            status: "Pending",
+          })
+          .select("order_id")
+          .single();
+
+        if (orderError) {
+          console.error("Order creation error:", orderError.message);
+          throw new Error(orderError.message);
+        }
+
+        // 5. Save the products in order_items
+        const orderItems = group.items.map((item) => ({
+          order_id: order.order_id,
+          product_id: item.id,
+          product_name: item.name,
+          product_photo_at_purchase: item.image,
+          quantity: item.quantity,
+          price_at_purchase: item.price,
+          seller_id: group.seller_id,
+        }));
+
+        const { error: itemsError } = await supabase
+        .from("order_items")
+         .insert(orderItems);
+
+        if (itemsError) {
+          console.error("Order items full error:", itemsError);
+          console.error("Order items data:", orderItems);
+          throw new Error(itemsError.message);
+        }
+
+        createdOrders.push(order);
+      }
+
+      // 6. Save a summary for the existing confirmation page
+      const confirmation = {
+        id: createdOrders[0].order_id,
+        customerName: name,
+        phone: phone,
+        location: location,
+        fulfillmentMethod: fulfillmentMethod,
+        notes: notes,
+        items: cart,
+        total: total,
+        date: new Date().toLocaleString(),
+        status: "Pending",
+        orderCount: createdOrders.length,
+      };
+
+      localStorage.setItem(
+        "latestOrder",
+        JSON.stringify(confirmation)
+      );
+
+      // 7. Clear the cart
+      localStorage.removeItem("cart");
+
+      alert("Your order has been placed successfully!");
+
+      navigate("/order-confirmation");
+    } catch (error) {
+      console.error("Checkout error:", error);
+      alert(
+        "Unable to complete your order: " + error.message
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   if (cart.length === 0) {
@@ -640,7 +785,22 @@ function Checkout() {
 
           <h2>Handover Details</h2>
 
-          <label>Handover Location</label>
+          <label>Fulfillment Method</label>
+          <select
+            value={fulfillmentMethod}
+            onChange={(e) => setFulfillmentMethod(e.target.value)}
+            required
+          >
+            <option value="Pickup">Pickup</option>
+            <option value="Delivery">Delivery</option>
+          </select>
+
+          <label>
+            {fulfillmentMethod === "Pickup"
+              ? "Pickup Location"
+              : "Delivery Location"}
+          </label>
+
           <select
             value={location}
             onChange={(e) => setLocation(e.target.value)}
@@ -663,8 +823,12 @@ function Checkout() {
             rows="4"
           />
 
-          <button type="submit" className="place-order-button">
-            Place Order
+          <button
+            type="submit"
+            className="place-order-button"
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? "Placing Order..." : "Place Order"}
           </button>
         </form>
 
@@ -691,6 +855,7 @@ function Checkout() {
     </div>
   );
 }
+
 
 function OrderConfirmation() {
   const navigate = useNavigate();
@@ -796,8 +961,63 @@ function OrderConfirmation() {
   );
 }
 
+
 function Orders() {
-  const orders = JSON.parse(localStorage.getItem("orders") || "[]");
+  const navigate = useNavigate();
+
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchOrders() {
+      try {
+        // 1. Get the logged-in user
+        const { data: authData, error: authError } =
+          await supabase.auth.getUser();
+
+        if (authError || !authData.user) {
+          navigate("/login");
+          return;
+        }
+
+        // 2. Get the buyer's user_id
+        const { data: buyer, error: buyerError } = await supabase
+          .from("users")
+          .select("user_id")
+          .eq("auth_user_id", authData.user.id)
+          .eq("account_status", "Active")
+          .maybeSingle();
+
+        if (buyerError || !buyer) {
+          throw new Error("Unable to find your user profile.");
+        }
+
+        // 3. Fetch orders and their order items
+        const { data, error } = await supabase
+          .from("orders")
+          .select("*, order_items!order_items_order_id_fkey(*)")
+          .eq("buyer_id", buyer.user_id)
+          .order("created_at", { ascending: false });
+
+        if (error) {
+          throw error;
+        }
+
+        setOrders(data || []);
+      } catch (error) {
+        console.error("Fetch orders error:", error);
+        alert("Unable to load your orders: " + error.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchOrders();
+  }, [navigate]);
+
+  if (loading) {
+    return <div className="orders-page">Loading your orders...</div>;
+  }
 
   return (
     <div className="orders-page">
@@ -816,72 +1036,158 @@ function Orders() {
         </div>
       ) : (
         <div className="orders-list">
-          {[...orders].reverse().map((order) => (
-           <Link
-               to={`/order/${order.id}`}
-               className="order-card"
-               key={order.id}
-           >
-              <div className="order-card-header">
-                <div>
-                  <h3>Order #{String(order.id).slice(-6)}</h3>
-                  <p>{order.date}</p>
-                </div>
+          {orders.map((order) => {
+            const orderItems = order.order_items || [];
 
-                <span className="order-status">
-                  {order.status}
-                </span>
-              </div>
+            const orderTotal = orderItems.reduce(
+              (sum, item) =>
+                sum + Number(item.price_at_purchase) * item.quantity,
+              0
+            );
 
-              <div className="order-card-items">
-                {order.items.map((item) => (
-                  <div className="order-item" key={item.id}>
-                    <img src={item.image} alt={item.name} />
-
-                    <div className="order-item-info">
-                      <p>{item.name}</p>
-                      <span>Quantity: {item.quantity}</span>
-                    </div>
-
-                    <p className="order-item-price">
-                      RM {(item.price * item.quantity).toFixed(2)}
+            return (
+              <Link
+                to={`/order/${order.order_id}`}
+                className="order-card"
+                key={order.order_id}
+              >
+                <div className="order-card-header">
+                  <div>
+                    <h3>
+                      Order #{String(order.order_id).slice(-6)}
+                    </h3>
+                    <p>
+                      {new Date(order.created_at).toLocaleString()}
                     </p>
                   </div>
-                ))}
-              </div>
 
-              <div className="order-card-footer">
-                <div>
-                  <span>Handover Location</span>
-                  <p>{order.location}</p>
+                  <span className="order-status">
+                    {order.status}
+                  </span>
                 </div>
 
-                <div className="order-total">
-                  <span>Total</span>
-                  <p>RM {order.total.toFixed(2)}</p>
+                <div className="order-card-items">
+                  {orderItems.map((item) => (
+                    <div
+                      className="order-item"
+                      key={item.order_item_id}
+                    >
+                      <img
+                        src={item.product_photo_at_purchase}
+                        alt={item.product_name}
+                      />
+
+                      <div className="order-item-info">
+                        <p>{item.product_name}</p>
+                        <span>Quantity: {item.quantity}</span>
+                      </div>
+
+                      <p className="order-item-price">
+                        RM{" "}
+                        {(
+                          Number(item.price_at_purchase) *
+                          item.quantity
+                        ).toFixed(2)}
+                      </p>
+                    </div>
+                  ))}
                 </div>
-              </div>
-            </Link>
-          ))}
+
+                <div className="order-card-footer">
+                  <div>
+                    <span>Handover Location</span>
+                    <p>{order.handover_location}</p>
+                  </div>
+
+                  <div className="order-total">
+                    <span>Total</span>
+                    <p>RM {orderTotal.toFixed(2)}</p>
+                  </div>
+                </div>
+              </Link>
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
 
+
+
 function OrderDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
 
-  const orders = JSON.parse(localStorage.getItem("orders") || "[]");
+  const [order, setOrder] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState("");
 
-  const order = orders.find((item) => String(item.id) === String(id));
+  useEffect(() => {
+    async function fetchOrderDetails() {
+      try {
+        setLoading(true);
+        setErrorMessage("");
 
-  if (!order) {
+        // 1. Get logged-in user
+        const { data: authData, error: authError } =
+          await supabase.auth.getUser();
+
+        if (authError) throw authError;
+
+        if (!authData.user) {
+          navigate("/login");
+          return;
+        }
+
+        // 2. Find buyer's user_id
+        const { data: buyer, error: buyerError } = await supabase
+          .from("users")
+          .select("user_id")
+          .eq("auth_user_id", authData.user.id)
+          .eq("account_status", "Active")
+          .single();
+
+        if (buyerError) throw buyerError;
+
+        // 3. Get this buyer's order from Supabase
+        const { data, error } = await supabase
+          .from("orders")
+          .select(`
+            *,
+            order_items!order_items_order_id_fkey(*)
+          `)
+          .eq("order_id", id)
+          .eq("buyer_id", buyer.user_id)
+          .single();
+
+        if (error) throw error;
+
+        setOrder(data);
+      } catch (error) {
+        console.error("Fetch order details error:", error);
+        setErrorMessage(error.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchOrderDetails();
+  }, [id, navigate]);
+
+  if (loading) {
+    return (
+      <div className="order-details-page">
+        Loading order details...
+      </div>
+    );
+  }
+
+  if (errorMessage || !order) {
     return (
       <div className="order-details-page">
         <h2>Order Not Found</h2>
-        <p>We couldn't find this order.</p>
+        <p>{errorMessage || "We couldn't find this order."}</p>
 
         <button onClick={() => navigate("/orders")}>
           Back to My Orders
@@ -889,6 +1195,14 @@ function OrderDetails() {
       </div>
     );
   }
+
+  const orderItems = order.order_items || [];
+
+  const total = orderItems.reduce(
+    (sum, item) =>
+      sum + Number(item.price_at_purchase) * item.quantity,
+    0
+  );
 
   return (
     <div className="order-details-page">
@@ -909,27 +1223,32 @@ function OrderDetails() {
 
         <div className="order-info-row">
           <span>Order ID</span>
-          <p>#{String(order.id).slice(-6)}</p>
+          <p>#{order.order_id.slice(-6)}</p>
         </div>
 
         <div className="order-info-row">
           <span>Order Date</span>
-          <p>{order.date}</p>
+          <p>{new Date(order.created_at).toLocaleString()}</p>
         </div>
 
         <div className="order-info-row">
           <span>Customer Name</span>
-          <p>{order.customerName}</p>
+          <p>{order.buyer_name || "Not provided"}</p>
         </div>
 
         <div className="order-info-row">
           <span>Phone Number</span>
-          <p>{order.phone}</p>
+          <p>{order.buyer_phone || "Not provided"}</p>
+        </div>
+
+        <div className="order-info-row">
+          <span>Fulfillment Method</span>
+          <p>{order.fulfillment_method}</p>
         </div>
 
         <div className="order-info-row">
           <span>Handover Location</span>
-          <p>{order.location}</p>
+          <p>{order.handover_location || "Not provided"}</p>
         </div>
 
         {order.notes && (
@@ -943,25 +1262,38 @@ function OrderDetails() {
       <div className="order-details-card">
         <h3>Items Ordered</h3>
 
-        {order.items.map((item) => (
-          <div className="order-detail-item" key={item.id}>
-            <img src={item.image} alt={item.name} />
+        {orderItems.map((item) => (
+          <div
+            className="order-detail-item"
+            key={item.order_item_id}
+          >
+            {item.product_photo_at_purchase && (
+              <img
+                src={item.product_photo_at_purchase}
+                alt={item.product_name}
+              />
+            )}
 
             <div className="order-detail-item-info">
-              <h4>{item.name}</h4>
+              <h4>{item.product_name}</h4>
               <p>Quantity: {item.quantity}</p>
-              <p>RM {item.price.toFixed(2)} each</p>
+              <p>
+                RM {Number(item.price_at_purchase).toFixed(2)} each
+              </p>
             </div>
 
             <strong>
-              RM {(item.price * item.quantity).toFixed(2)}
+              RM{" "}
+              {(
+                Number(item.price_at_purchase) * item.quantity
+              ).toFixed(2)}
             </strong>
           </div>
         ))}
 
         <div className="order-details-total">
           <span>Total Amount</span>
-          <strong>RM {order.total.toFixed(2)}</strong>
+          <strong>RM {total.toFixed(2)}</strong>
         </div>
       </div>
     </div>
@@ -1097,6 +1429,17 @@ function SellerDashboard() {
             </div>
           </div>
 
+          <div className="dashboard-order-management">
+              <div>
+              <h2>Order Management</h2>
+              <p>View and manage orders from your customers.</p>
+            </div>
+
+            <Link to="/seller-orders" className="add-listing-button">
+              Manage Orders →
+            </Link>
+          </div>
+
           <div className="dashboard-recent-listings">
             <div className="recent-listings-header">
               <h2>Recent Listings</h2>
@@ -1143,6 +1486,213 @@ function SellerDashboard() {
 }
 
 
+function SellerOrders() {
+  const navigate = useNavigate();
+
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  useEffect(() => {
+    async function fetchSellerOrders() {
+      try {
+        setLoading(true);
+        setErrorMessage("");
+
+        // 1. Get logged-in user
+        const { data: authData, error: authError } =
+          await supabase.auth.getUser();
+
+        if (authError) throw authError;
+
+        if (!authData.user) {
+          navigate("/login");
+          return;
+        }
+
+        // 2. Find seller's user_id
+        const { data: userData, error: userError } = await supabase
+          .from("users")
+          .select("user_id")
+          .eq("auth_user_id", authData.user.id)
+          .eq("account_status", "Active")
+          .single();
+
+        if (userError) throw userError;
+
+        // 3. Get orders belonging to this seller
+        const { data, error } = await supabase
+          .from("orders")
+          .select(`
+            *,
+            order_items!order_items_order_id_fkey(*)
+          `)
+          .eq("seller_id", userData.user_id)
+          .order("created_at", { ascending: false });
+
+        if (error) throw error;
+
+        setOrders(data || []);
+      } catch (error) {
+        console.error("Fetch seller orders error:", error);
+        setErrorMessage(error.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchSellerOrders();
+  }, [navigate]);
+
+  async function updateOrderStatus(orderId, newStatus) {
+  try {
+    const { error } = await supabase
+      .from("orders")
+      .update({ status: newStatus })
+      .eq("order_id", orderId);
+
+    if (error) throw error;
+
+    setOrders((currentOrders) =>
+      currentOrders.map((order) =>
+        order.order_id === orderId
+          ? { ...order, status: newStatus }
+          : order
+      )
+    );
+  } catch (error) {
+    console.error("Update order status error:", error);
+    alert("Unable to update order: " + error.message);
+  }
+}
+
+  if (loading) {
+    return <div className="seller-orders-page">Loading orders...</div>;
+  }
+
+  return (
+    <div className="seller-orders-page">
+      <h1>Manage Orders</h1>
+      <p>View orders placed by your customers.</p>
+
+      {errorMessage && (
+        <p className="error-message">{errorMessage}</p>
+      )}
+
+      {!errorMessage && orders.length === 0 && (
+        <p>You don't have any orders yet.</p>
+      )}
+
+      {!errorMessage && orders.map((order) => {
+        const orderItems = order.order_items || [];
+
+        const total = orderItems.reduce(
+          (sum, item) =>
+            sum + Number(item.price_at_purchase) * item.quantity,
+          0
+        );
+
+        return (
+          <div className="seller-order-card" key={order.order_id}>
+            <h3>Order #{order.order_id.slice(-6)}</h3>
+
+            <p>Status: {order.status}</p>
+            <p>Date: {new Date(order.created_at).toLocaleString()}</p>
+            <p>Buyer: {order.buyer_name || "Not provided"}</p>
+            <p>Contact: {order.buyer_phone || "Not provided"}</p>
+            <p>Fulfillment: {order.fulfillment_method}</p>
+
+            {order.status === "Pending" && (
+            <button
+            onClick={() => updateOrderStatus(order.order_id, "Confirmed")}
+            >
+            Confirm Order
+            </button>
+            )}
+
+            {order.status === "Pending" && (
+  <button
+    className="reject-order-button"
+    onClick={() => {
+      const confirmed = window.confirm(
+        "Are you sure you want to reject this order? The product stock will be restored."
+      );
+
+      if (confirmed) {
+        updateOrderStatus(order.order_id, "Rejected");
+      }
+    }}
+  >
+    Reject Order
+  </button>
+)}
+
+          {order.status === "Confirmed" && (
+  <button
+    onClick={() => updateOrderStatus(order.order_id, "Preparing")}
+  >
+    Start Preparing
+  </button>
+)}
+
+{order.status === "Preparing" && (
+  <button
+    onClick={() =>
+      updateOrderStatus(
+        order.order_id,
+        order.fulfillment_method === "Pickup"
+          ? "Ready for Pickup"
+          : "Out for Delivery"
+      )
+    }
+  >
+    {order.fulfillment_method === "Pickup"
+      ? "Ready for Pickup"
+      : "Out for Delivery"}
+  </button>
+)}
+
+{["Ready for Pickup", "Out for Delivery"].includes(order.status) && (
+  <button
+    onClick={() => {
+      const confirmed = window.confirm(
+        "Are you sure this order has been completed?"
+      );
+
+      if (confirmed) {
+        updateOrderStatus(order.order_id, "Completed");
+      }
+    }}
+  >
+    Mark as Completed
+  </button>
+)}
+
+            {order.handover_location && (
+              <p>Handover location: {order.handover_location}</p>
+            )}
+
+            {order.notes && <p>Buyer notes: {order.notes}</p>}
+
+            <h4>Items</h4>
+
+            {orderItems.map((item) => (
+              <div key={item.order_item_id}>
+                <p>
+                  {item.product_name} × {item.quantity}
+                  {" — RM "}
+                  {(Number(item.price_at_purchase) * item.quantity).toFixed(2)}
+                </p>
+              </div>
+            ))}
+
+            <h4>Total: RM {total.toFixed(2)}</h4>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function MyListings() {
   const [listings, setListings] = useState([]);
@@ -2996,6 +3546,7 @@ export {
   Orders,
   OrderDetails,
   SellerDashboard,
+  SellerOrders,
   MyListings,
   ListItem,
   Profile,

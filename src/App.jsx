@@ -15,6 +15,7 @@ import {
   Orders,
   OrderDetails,
   SellerDashboard,
+  SellerOrders,
   MyListings,
   ListItem,
   Profile,
@@ -222,6 +223,7 @@ function HomePage() {
         <Route path="/orders" element={<Orders />} />
         <Route path="/order/:id" element={<OrderDetails />} />
         <Route path="/seller" element={<SellerDashboard />} />
+        <Route path="/seller-orders" element={<SellerOrders />} />
         <Route path="/my-listings" element={<MyListings />} />
         <Route path="/sell" element={<ListItem />} />
         <Route path="/profile" element={<Profile />} />

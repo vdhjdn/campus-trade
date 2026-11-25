@@ -3615,3 +3615,147 @@ button, input {
     padding: 12px;
   }
 }
+
+
+/* ===== SELLER ORDERS PAGE ===== */
+
+.seller-orders-page {
+  padding: 40px 6%;
+  min-height: 70vh;
+  background: #f8fbff;
+}
+
+.seller-orders-page > h1 {
+  font-size: 30px;
+  color: #34546f;
+  margin-bottom: 8px;
+}
+
+.seller-orders-page > p {
+  color: #888;
+  margin-bottom: 30px;
+}
+
+/* Order Card */
+
+.seller-order-card {
+  background: #fff;
+  border: 1px solid #dceaf5;
+  border-radius: 16px;
+  padding: 25px;
+  margin-bottom: 22px;
+  box-shadow: 0 4px 14px rgba(80, 130, 170, 0.06);
+  transition: 0.2s;
+}
+
+.seller-order-card:hover {
+  border-color: #b9d9f2;
+  box-shadow: 0 6px 18px rgba(80, 130, 170, 0.1);
+}
+
+.seller-order-card h3 {
+  font-size: 20px;
+  color: #34546f;
+  margin-bottom: 15px;
+}
+
+.seller-order-card h4 {
+  color: #34546f;
+  font-size: 16px;
+  margin-top: 20px;
+  margin-bottom: 12px;
+}
+
+.seller-order-card p {
+  color: #777;
+  font-size: 14px;
+  line-height: 1.7;
+  margin-bottom: 5px;
+}
+
+/* Order Status */
+
+.seller-order-card > p:first-of-type {
+  display: inline-block;
+  background: #fff3c4;
+  color: #92712b;
+  padding: 6px 13px;
+  border-radius: 20px;
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+
+/* Order Items */
+
+.seller-order-card h4 + div {
+  padding: 10px 0;
+  border-bottom: 1px solid #edf2f7;
+}
+
+.seller-order-card h4 + div p {
+  color: #555;
+}
+
+/* Order Action Buttons */
+
+.seller-order-card button {
+  border: none;
+  border-radius: 10px;
+  padding: 11px 18px;
+  margin: 12px 10px 5px 0;
+  background: #dceeff;
+  color: #345c7d;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.seller-order-card button:hover {
+  background: #c6e2fa;
+  transform: translateY(-2px);
+}
+
+/* Reject Button */
+
+.seller-order-card button.reject-order-button {
+  background: #fff1d9;
+  color: #946b35;
+}
+
+.seller-order-card button.reject-order-button:hover {
+  background: #ffe5b8;
+}
+
+/* Empty and Error Messages */
+
+.seller-orders-page .error-message {
+  background: #fff1ed;
+  color: #b65c4b;
+  padding: 15px;
+  border-radius: 10px;
+}
+
+@media (max-width: 600px) {
+  .seller-orders-page {
+    padding: 30px 5%;
+  }
+
+  .seller-orders-page > h1 {
+    font-size: 25px;
+  }
+
+  .seller-order-card {
+    padding: 18px;
+  }
+
+  .seller-order-card h3 {
+    font-size: 18px;
+  }
+
+  .seller-order-card button {
+    padding: 10px 14px;
+    font-size: 13px;
+  }
+}
