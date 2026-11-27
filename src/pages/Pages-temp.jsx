@@ -497,7 +497,7 @@ function Cart() {
             cart.map((item) => (
               <div className="cart-item" key={item.id}>
                 <img
-                  src={`/images/${item.image}`}
+                  src={item.image}
                   alt={item.name}
                 />
 
@@ -1274,6 +1274,8 @@ function OrderDetails() {
   const [updating, setUpdating] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [qrUrl, setQrUrl] = useState("");
+  const [qrImageUrl, setQrImageUrl] = useState("");
 
   useEffect(() => {
     async function fetchOrderDetails() {
@@ -1313,6 +1315,9 @@ const { data, error } = await supabase
       shop_name,
       duitnow_qr_url
     ),
+    users!orders_seller_id_fkey (
+      duitnow_qr_url
+    ),
     payments (
       payment_id,
       amount,
@@ -1328,6 +1333,33 @@ const { data, error } = await supabase
   .single();
 
 if (error) throw error;
+
+const { data: qrPath, error: qrError } = await supabase
+  .rpc("get_order_payment_qr", {
+    p_order_id: id
+  });
+
+if (qrError) throw qrError;
+
+console.log("QR Path:", qrPath);
+console.log("QR Error:", qrError);
+
+setQrUrl(qrPath || "");
+
+if (qrPath) {
+  const { data: signedData, error: signedError } = await supabase.storage
+    .from("payment-receipts")
+    .createSignedUrl(qrPath, 3600);
+
+  console.log("Signed URL:", signedData?.signedUrl);
+  console.log("Signed URL Error:", signedError);
+
+  if (signedError) throw signedError;
+
+  setQrImageUrl(signedData.signedUrl);
+} else {
+  setQrImageUrl("");
+}
 
 setOrder(data);
 
@@ -1358,6 +1390,19 @@ setOrder(data);
       .eq("order_id", id);
 
     if (error) throw error;
+
+    // Get the correct payment QR
+const { data: qrPath, error: qrError } = await supabase
+  .rpc("get_order_payment_qr", {
+    p_order_id: id
+  });
+
+if (qrError) throw qrError;
+
+setQrUrl(qrPath || "");
+
+// Generate a signed URL to display the QR image
+
 
     setOrder((currentOrder) => ({
       ...currentOrder,
@@ -1678,16 +1723,20 @@ async function uploadReceipt() {
 )}
 
 
-      {shop?.duitnow_qr_url && (
-        <div className="payment-qr-section">
-          <h4>Seller's DuitNow QR Code</h4>
-          <img
-            src={shop.duitnow_qr_url}
-            alt="Seller's DuitNow QR Code"
-          />
-          <p>Scan this QR code to make your payment.</p>
-        </div>
-      )}
+      
+{qrImageUrl ? (
+  <div className="payment-qr-section">
+    <h4>Seller's DuitNow QR Code</h4>
+    <img
+      src={qrImageUrl}
+      alt="Seller's DuitNow QR Code"
+    />
+    <p>Scan this QR code to make your payment.</p>
+  </div>
+) : (
+  <p>Seller has not uploaded a DuitNow QR code yet.</p>
+)}
+
     </>
   ) : (
     <p>Payment information is not available.</p>
@@ -1703,6 +1752,11 @@ function SellerDashboard() {
   const [listings, setListings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
+  const [sellerId, setSellerId] = useState(null);
+  const [qrUrl, setQrUrl] = useState("");
+  const [qrImageUrl, setQrImageUrl] = useState("");
+  const [selectedQr, setSelectedQr] = useState(null);
+  const [uploadingQr, setUploadingQr] = useState(false);
 
   useEffect(() => {
     async function fetchListings() {
@@ -1724,11 +1778,27 @@ function SellerDashboard() {
         // 2. Get the seller's user_id
         const { data: userData, error: userError } = await supabase
           .from("users")
-          .select("user_id")
+          .select("user_id, duitnow_qr_url")
           .eq("auth_user_id", authData.user.id)
           .single();
 
         if (userError) throw userError;
+
+        setSellerId(userData.user_id);
+
+const savedQrPath = userData.duitnow_qr_url || "";
+setQrUrl(savedQrPath);
+
+if (savedQrPath) {
+  const { data: signedData, error: signedError } =
+    await supabase.storage
+      .from("payment-receipts")
+      .createSignedUrl(savedQrPath, 3600);
+
+  if (signedError) throw signedError;
+
+  setQrImageUrl(signedData.signedUrl);
+}
 
         // 3. Get the seller's listings from Supabase
         const { data, error } = await supabase
@@ -1760,6 +1830,89 @@ function SellerDashboard() {
 
     fetchListings();
   }, []);
+
+
+async function uploadPersonalQr() {
+  if (!selectedQr) {
+    alert("Please select a QR image first.");
+    return;
+  }
+
+  if (!selectedQr.type.startsWith("image/")) {
+    alert("Please select an image file.");
+    return;
+  }
+
+  if (selectedQr.size > 5 * 1024 * 1024) {
+    alert("Image size must be less than 5MB.");
+    return;
+  }
+
+  if (!sellerId) {
+    alert("Seller information not found. Please log in again.");
+    return;
+  }
+
+  try {
+    setUploadingQr(true);
+
+    const { data: authData, error: authError } =
+      await supabase.auth.getUser();
+
+    if (authError) throw authError;
+    if (!authData.user) throw new Error("Please log in again.");
+
+    const fileExt = selectedQr.name.split(".").pop();
+
+    const filePath =
+      `${authData.user.id}/personal-qr-${Date.now()}.${fileExt}`;
+
+    // Upload QR image
+    const { error: uploadError } = await supabase.storage
+      .from("payment-receipts")
+      .upload(filePath, selectedQr, {
+        upsert: false,
+        contentType: selectedQr.type,
+      });
+
+    if (uploadError) throw uploadError;
+
+    // Save QR file path in users table
+    const { error: updateError } = await supabase
+      .from("users")
+      .update({ duitnow_qr_url: filePath })
+      .eq("user_id", sellerId);
+
+    if (updateError) {
+      await supabase.storage
+        .from("payment-receipts")
+        .remove([filePath]);
+
+      throw updateError;
+    }
+
+    const { data: signedData, error: signedError } =
+  await supabase.storage
+    .from("payment-receipts")
+    .createSignedUrl(filePath, 3600);
+
+if (signedError) {
+  console.error("Unable to generate QR preview:", signedError);
+}
+
+setQrUrl(filePath);
+setQrImageUrl(signedData?.signedUrl || "");
+setSelectedQr(null);
+
+    alert("Personal DuitNow QR uploaded successfully!");
+  } catch (error) {
+    console.error("QR upload error:", error);
+    alert("Unable to upload QR: " + error.message);
+  } finally {
+    setUploadingQr(false);
+  }
+}
+
 
   // Calculate dashboard statistics
   const totalListings = listings.length;
@@ -1826,6 +1979,53 @@ function SellerDashboard() {
               <p>Estimated value of current stock</p>
             </div>
           </div>
+
+
+<div className="dashboard-qr-section">
+  <h2>Personal DuitNow QR</h2>
+  <p>
+    Upload your personal DuitNow QR code so buyers can pay
+    for products that are not linked to a Shop.
+  </p>
+
+  {qrUrl && (
+    <div className="dashboard-qr-preview">
+     <img
+     src={qrImageUrl}
+      alt="Personal DuitNow QR"
+    />
+      <p>Your personal QR code is uploaded.</p>
+    </div>
+  )}
+
+  {!qrUrl && (
+    <p>You haven't uploaded a personal QR code yet.</p>
+  )}
+
+  <input
+    type="file"
+    accept="image/*"
+    onChange={(e) =>
+      setSelectedQr(e.target.files[0] || null)
+    }
+  />
+
+  {selectedQr && (
+    <p>Selected file: {selectedQr.name}</p>
+  )}
+
+  <button
+    onClick={uploadPersonalQr}
+    disabled={!selectedQr || uploadingQr}
+  >
+    {uploadingQr
+      ? "Uploading..."
+      : qrUrl
+        ? "Replace QR Code"
+        : "Upload QR Code"}
+  </button>
+</div>
+
 
           <div className="dashboard-order-management">
               <div>
