@@ -499,7 +499,7 @@ function Cart() {
                 <img
                   src={item.image}
                   alt={item.name}
-                />
+              />
 
                 <div className="cart-item-info">
                   <h3>{item.name}</h3>
@@ -4381,6 +4381,190 @@ function Login() {
 }
 
 
+function ForgotPassword() {
+  const [email, setEmail] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+
+  async function handleReset(e) {
+    e.preventDefault();
+
+    setLoading(true);
+    setMessage("");
+    setErrorMessage("");
+
+    const { error } = await supabase.auth.resetPasswordForEmail(
+      email,
+      {
+        redirectTo: `${window.location.origin}/reset-password`,
+      }
+    );
+
+    if (error) {
+      setErrorMessage(error.message);
+    } else {
+      setMessage("Password reset link sent! Please check your email.");
+    }
+
+    setLoading(false);
+  }
+
+  return (
+    <div className="login-page">
+      <div className="login-container">
+        <div className="login-welcome">
+          <p className="login-eyebrow">CAMPUSTRADE</p>
+          <h1>Forgot Password?</h1>
+          <p>
+            Enter your email address and we will send you a password reset link.
+          </p>
+        </div>
+
+        <form className="login-form" onSubmit={handleReset}>
+          <h2>Reset Your Password</h2>
+
+          {errorMessage && (
+            <p style={{ color: "red" }}>{errorMessage}</p>
+          )}
+
+          {message && (
+            <p style={{ color: "green" }}>{message}</p>
+          )}
+
+          <div className="login-field">
+            <label>Email Address</label>
+            <input
+              type="email"
+              placeholder="Enter your registered email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+          </div>
+
+          <button
+            type="submit"
+            className="login-button"
+            disabled={loading}
+          >
+            {loading ? "Sending..." : "Send Reset Link"}
+          </button>
+
+          <p className="register-prompt">
+            Remember your password?{" "}
+            <Link to="/login">Back to Login</Link>
+          </p>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+
+
+function ResetPassword() {
+  const navigate = useNavigate();
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [message, setMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleUpdatePassword(e) {
+    e.preventDefault();
+
+    setMessage("");
+    setErrorMessage("");
+
+    if (password.length < 6) {
+      setErrorMessage("Password must be at least 6 characters.");
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setErrorMessage("Passwords do not match.");
+      return;
+    }
+
+    setLoading(true);
+
+    const { error } = await supabase.auth.updateUser({
+      password: password,
+    });
+
+    if (error) {
+      setErrorMessage(error.message);
+      setLoading(false);
+      return;
+    }
+
+    setMessage("Password updated successfully!");
+
+    setLoading(false);
+
+    setTimeout(() => {
+      navigate("/login");
+    }, 2000);
+  }
+
+  return (
+    <div className="login-page">
+      <div className="login-container">
+        <div className="login-welcome">
+          <p className="login-eyebrow">CAMPUSTRADE</p>
+          <h1>Reset Password</h1>
+          <p>Create a new password for your account.</p>
+        </div>
+
+        <form className="login-form" onSubmit={handleUpdatePassword}>
+          <h2>Set New Password</h2>
+
+          {errorMessage && (
+            <p style={{ color: "red" }}>{errorMessage}</p>
+          )}
+
+          {message && (
+            <p style={{ color: "green" }}>{message}</p>
+          )}
+
+          <div className="login-field">
+            <label>New Password</label>
+            <input
+              type="password"
+              placeholder="Enter new password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </div>
+
+          <div className="login-field">
+            <label>Confirm New Password</label>
+            <input
+              type="password"
+              placeholder="Confirm new password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+            />
+          </div>
+
+          <button
+            type="submit"
+            className="login-button"
+            disabled={loading}
+          >
+            {loading ? "Updating..." : "Update Password"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+
+
 function Register() {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -4772,6 +4956,8 @@ export {
   Profile,
   Login,
   Register,
+  ForgotPassword,
+  ResetPassword,
   Conversations,
   CreateShop,
   MyShop,

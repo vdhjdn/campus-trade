@@ -22,6 +22,8 @@ import {
   Profile,
   Login,
   Register,
+  ForgotPassword,
+  ResetPassword,
   Conversations,
   CreateShop,
   MyShop,
@@ -231,6 +233,8 @@ function HomePage() {
         <Route path="/profile" element={<Profile />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/conversations" element={<Conversations />} />
         <Route path="/create-shop" element={<CreateShop />} />
         <Route path="/my-shop" element={<MyShop />} />
